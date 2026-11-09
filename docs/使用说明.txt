@@ -29,7 +29,12 @@ D:\CursorStudio\
   例：Bibata-Modern-Classic → 「Bibata Modern Classic」。
 · 文件夹里需要放 .cur / .ani 文件（可以再套一层子目录，会递归找）。
 · 点「打开自定义文件夹」直接打开这个目录，方便拷包进去。
-· 「导入光标包」按钮也很方便：选一个放在别处的光标包文件夹，工具会把它复制进自定义目录并立即识别。
+· 「在线获取光标包」：不用自己去 GitHub 翻 Release —— 选一个来源，列表里就是这个项目最新 Release 里的
+  Windows 光标包（名称 + 体积），选中一个点「下载并安装」，工具会下载、解压到自定义目录、登记成方案并自动选中。
+  来源下拉里有 Bibata / BreezeX 两个作者的官方仓库，还有对应的「镜像加速」（国内直连 GitHub 常常只有几十 KB/s）；
+  最后一项「自定义链接…」可以粘贴任意 .zip 直链，同样能装。
+  下载时列表下方会显示进度条和「百分比（已下载 / 总大小）」，右下角按钮同时变成「取消下载」，
+  随时可以中止，已下载的半截文件会自动删掉，不会在临时目录里留垃圾。
 · 文件始终留在自定义目录里被直接引用，工具不会再把它们拷一份到 AppData。
 
 四、界面
@@ -51,7 +56,8 @@ D:\CursorStudio\
 · 鼠标手形：按钮、下拉框、滑块上悬停时的小手，也换成了当前方案自己的 Hand 指针
   （同样从包里的 128 帧高质量重采样），不再是 Windows 自带那只白手。
   大小跟着档位实时走：拖动大小滑块的那一刻，按钮上的小手就跟着变大变小（2 档 40 px、5 档 64 px、
-  8 档 88 px），不用重启程序；点「应用大小」之后，界面手形与桌面系统光标尺寸完全一致。
+  不用重启程序。为了不让一只大手把下拉列表整行盖住，窗口内的手形和箭头最多 40 px（按 DPI 换算），
+  桌面上的系统光标不受这个上限影响。
   切换方案后也会自动重载，点按钮的手感和系统桌面完全一致。
 · 下拉列表：完全自绘，像素级平滑滚动（滚轮带缓动，不是一格一格跳），右侧自带细滚动条，
   整行悬停高亮，选中即预览。
@@ -76,6 +82,7 @@ D:\CursorStudio\
   四周留出约 28% 的边距不贴外沿；线宽和长短都按圆点大小算，100% / 125% / 150% 缩放下都严丝合缝。
   浮现带淡入淡出加轻微放大，圆点同时略提亮并描一圈细边。
   触发时机也改成了「按下并在同一个圆点上抬起」——从红点按下再移开不会误关窗口。
+  鼠标停上去约 0.26 秒会浮出一个小黑提示：最小化到任务栏 / 铺满屏幕（已经最大化时是「还原窗口」）/ 关闭窗口。
 · 最大 / 还原带过渡动画：点绿点后，窗口用 0.2–0.28 秒（变化越大时长越长）从当前尺寸铺满全屏；
   再点一次，同样平滑缩回原来的尺寸和位置。
   - 动画不再挂在 15 ms 定时器上，改成按真实时钟自己驱动帧：一帧画完立刻算下一帧，
@@ -121,5 +128,5 @@ Windows 没有独立 ID，只能跟随系统默认，属正常现象，不是失
   （注册表里会留一条方案记录，无影响）。
 
 八、自己编译（可选）
-csc.exe /nologo /codepage:65001 /target:winexe /platform:anycpu /out:CursorStudio.exe /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll CursorCore.cs CursorUI.cs
+csc.exe /nologo /codepage:65001 /target:winexe /platform:anycpu /out:CursorStudio.exe /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll CursorCore.cs CursorUI.cs
 （csc 位于 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\）
