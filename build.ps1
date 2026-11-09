@@ -29,6 +29,7 @@ $out = Join-Path $dist 'CursorStudio.exe'
     ('/win32icon:' + $icon) `
     ('/out:' + $out) `
     /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
+    /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
     $src1 $src2
 
 if ($LASTEXITCODE -ne 0) { throw ('csc 退出码 ' + $LASTEXITCODE) }
