@@ -29,7 +29,7 @@ CursorStudio 就是把这套流程做成图形界面的工具：换方案、调�
 | **在线获取光标包** | 内置 Bibata / BreezeX 的 GitHub Release 列表（含 ghproxy 镜像加速）与「自定义直链」；选中即下载、解压到 `custom/`、登记成方案并自动选中 |
 | **大小调节** | 1–15 档，`px = 32 + (档位-1) × 8`（32 / 40 / 48 … 144 px），档位实时预览；滑条为细轨道 + 蓝色渐变进度 + 带投影的圆形滑块，悬停/拖动时滑块放大并透出光晕 |
 | **形态预览** | 21 种指针形态，直接解析 `.cur`/`.ani` 内部**最大原始帧**（通常 128×128）重采样，不是把 32px 小图拉大 |
-| **界面小手跟随** | 按钮、下拉框、滑块上的手形光标取自当前方案自己的 `Hand.cur`，尺寸跟着档位实时变 |
+| **界面小手跟随** | 按钮、下拉框、滑块上的手形光标取自当前方案自己的 `Hand.cur`，尺寸跟着档位实时变；窗口内封顶 40 px，避免档位调大后一只大手盖住下拉行 |
 | **指针不跳** | 启动、切方案、应用大小全程不移动指针；窗口里卡片与按钮用同一档位的箭头/小手，进出按钮不会有 32↔40 的尺寸跳变 |
 | **窗口自由缩放** | 无边框界面自己造缩放：四边 + 四角都能拖，卡片、按钮、下拉框、滑块与预览网格随窗口实时重排，最小 660×720 |
 | **macOS 红绿灯** | 右上角三色圆点：黄＝最小化、绿＝最大化/还原、红＝关闭（红在最右）；悬停图标是矢量笔画手绘、按圆点比例居中：＋ / － / 双框 / ✕，并浮出「最小化到任务栏 / 铺满屏幕 / 关闭窗口」的提示气泡 |
@@ -109,10 +109,11 @@ csc /nologo /codepage:65001 /target:winexe /platform:anycpu ^
     /win32manifest:src\CursorStudio.manifest /win32icon:assets\icon.ico ^
     /out:dist\CursorStudio.exe ^
     /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ^
+    /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll ^
     src\CursorCore.cs src\CursorUI.cs
 ```
 
-源码两个文件，约 2300 行，无第三方依赖：
+源码两个文件，约 3800 行，无第三方依赖（JSON 解析与解压用系统自带的 `System.Web.Extensions` / `System.IO.Compression`）：
 
 | 文件 | 职责 |
 |---|---|
@@ -148,7 +149,7 @@ csc /nologo /codepage:65001 /target:winexe /platform:anycpu ^
 （WinForms 自带的 `AutoScaleMode.Dpi + PerformAutoScale()` 在这个全自绘场景里实测完全无效，客户区不变、子控件不变，只能手写。）
 
 **6. 界面里的小手**
-不使用 `Cursors.Hand`（它取的是进程启动时的系统句柄，换方案后不会变），而是读 `HKCU\Control Panel\Cursors\Hand` 的路径，按当前档位像素重建，再递归赋给所有自绘控件；缓存按 px 索引，拖动滑块的那一刻就重建，所以手形大小和桌面系统光标始终一致。
+不使用 `Cursors.Hand`（它取的是进程启动时的系统句柄，换方案后不会变），而是读 `HKCU\Control Panel\Cursors\Hand` 的路径，按当前档位像素重建，再递归赋给所有自绘控件；缓存按 px 索引，拖动滑块的那一刻就重建，所以手形大小会跟着档位一起变。窗口内另设 40 逻辑像素的上限（按 DPI 换算）：档位调到 72 px 以上时，一只大手会把 34 px 高的下拉行整个盖住，反而不好点；桌面上的系统光标不受这个限制。
 
 ## 兼容性与已知限制
 
