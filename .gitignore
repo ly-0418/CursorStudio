@@ -1,0 +1,6 @@
+dist/
+*.zip
+*.tmp
+*.log
+.vs/
+out/
