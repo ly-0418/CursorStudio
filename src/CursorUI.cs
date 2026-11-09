@@ -132,6 +132,14 @@ namespace CursorStudioApp
 
         internal const int WM_NCLBUTTONDOWN = 0x00A1;
         internal const int HTCAPTION = 2;
+        internal const int HTLEFT = 10;
+        internal const int HTRIGHT = 11;
+        internal const int HTTOP = 12;
+        internal const int HTTOPLEFT = 13;
+        internal const int HTTOPRIGHT = 14;
+        internal const int HTBOTTOM = 15;
+        internal const int HTBOTTOMLEFT = 16;
+        internal const int HTBOTTOMRIGHT = 17;
         internal const int DI_NORMAL = 3;
     }
 
@@ -824,6 +832,90 @@ namespace CursorStudioApp
         }
     }
 
+    internal class TrafficDots : Control
+    {
+        internal Action<int> OnDot;   // 0 = 绿（最大化/还原）、1 = 黄（最小化）、2 = 红（关闭）
+        internal bool Maximized;
+
+        private int hover = -1;
+        private int dot, gap, pad;
+
+        private static readonly Color Green = Color.FromArgb(40, 205, 65);
+        private static readonly Color Yellow = Color.FromArgb(254, 189, 46);
+        private static readonly Color Red = Color.FromArgb(255, 96, 89);
+
+        internal TrafficDots()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            float k = Theme.K;
+            dot = (int)Math.Round(12 * k);
+            gap = (int)Math.Round(8 * k);
+            pad = (int)Math.Round(4 * k);
+            BackColor = Theme.Bg;
+            Font = Theme.F(7.5f, FontStyle.Bold);
+            Size = new Size(dot * 3 + gap * 2 + pad * 2, dot + pad * 2);
+        }
+
+        private int DotX(int i) { return (Width - (dot * 3 + gap * 2)) / 2 + i * (dot + gap); }
+        private int DotY { get { return (Height - dot) / 2; } }
+
+        private int IndexAt(Point p)
+        {
+            int oy = DotY;
+            if (p.Y < oy - gap / 2 || p.Y > oy + dot + gap / 2) return -1;
+            for (int i = 0; i < 3; i++)
+            {
+                int x = DotX(i);
+                if (p.X >= x - gap / 2 && p.X <= x + dot + gap / 2) return i;
+            }
+            return -1;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            int idx = IndexAt(e.Location);
+            if (idx != hover) { hover = idx; Invalidate(); }
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            hover = -1;
+            Invalidate();
+            base.OnMouseLeave(e);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                int idx = IndexAt(e.Location);
+                if (idx >= 0 && OnDot != null) OnDot(idx);
+            }
+            base.OnMouseDown(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color[] cols = new Color[] { Green, Yellow, Red };
+            string[] glyphs = new string[] { Maximized ? "－" : "＋", "－", "✕" };
+            for (int i = 0; i < 3; i++)
+            {
+                Rectangle r = new Rectangle(DotX(i), DotY, dot, dot);
+                using (SolidBrush b = new SolidBrush(cols[i])) g.FillEllipse(b, r);
+                if (hover == i)
+                {
+                    using (Pen p = new Pen(Color.FromArgb(90, 0, 0, 0), 1f)) g.DrawEllipse(p, r);
+                    Rectangle tr = new Rectangle(r.X - gap / 2, r.Y - gap / 2, r.Width + gap, r.Height + gap);
+                    TextRenderer.DrawText(g, glyphs[i], Font, tr, Color.FromArgb(130, 20, 20, 20),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+            }
+        }
+    }
+
     public class MainForm : Form
     {
         [DllImport("user32.dll")]
@@ -835,12 +927,19 @@ namespace CursorStudioApp
         private ModernButton btnImport;
         private ModernButton btnRestore;
         private ModernButton btnReload;
+        private ModernButton btnCustom;
         private ModernSlider slider;
         private ModernButton btnApplySize;
         private Label lblSizeValue;
         private Label lblActual;
         private FlowLayoutPanel flow;
         private Label lblStatus;
+        private Panel head;
+        private Label lblHint;
+        private TrafficDots dots;
+        private CardPanel cardScheme;
+        private CardPanel cardSize;
+        private CardPanel cardPreview;
         private static Bitmap appIconCache;
 
         internal static Bitmap AppIconBitmap()
@@ -910,6 +1009,8 @@ namespace CursorStudioApp
                 }
                 catch { }
             }
+            LayoutAll();
+            HookResize(this);
             LoadAll();
         }
 
@@ -927,6 +1028,212 @@ namespace CursorStudioApp
             }
         }
 
+        private int S(int v) { return (int)Math.Round(v * Theme.K); }
+
+        private void LayoutAll()
+        {
+            int w = ClientSize.Width;
+            int h = ClientSize.Height;
+            if (w < 200 || h < 200) return;
+            int m = S(24);
+            int pad = S(18);
+
+            if (head != null) head.SetBounds(0, 0, w, S(68));
+            if (dots != null)
+            {
+                dots.Location = new Point(w - S(18) - dots.Width, S(18));
+                dots.Maximized = (WindowState == FormWindowState.Maximized);
+                dots.Invalidate();
+            }
+
+            if (cardScheme != null)
+            {
+                cardScheme.SetBounds(m, S(84), w - m * 2, S(146));
+                int bw1 = S(124), bw2 = S(96), gap = S(10);
+                int refreshX = cardScheme.Width - pad - bw2;
+                int applyX = refreshX - gap - bw1;
+                btnRefresh.SetBounds(refreshX, S(46), bw2, S(38));
+                btnApply.SetBounds(applyX, S(46), bw1, S(38));
+                int cmbW = applyX - gap - pad;
+                if (cmbW < S(140)) cmbW = S(140);
+                cmb.SetBounds(pad, S(46), cmbW, S(38));
+
+                btnImport.SetBounds(S(18), S(98), S(124), S(32));
+                btnRestore.SetBounds(S(150), S(98), S(124), S(32));
+                btnReload.SetBounds(S(282), S(98), S(132), S(32));
+                btnCustom.SetBounds(cardScheme.Width - pad - S(152), S(98), S(152), S(32));
+                int runRight = cardScheme.Width - pad - S(152) - gap;
+                if (S(282) + S(132) > runRight)
+                    btnReload.SetBounds(runRight - S(132), S(98), S(132), S(32));
+                if (S(150) + S(124) > runRight - S(132) - gap)
+                    btnRestore.SetBounds(runRight - S(132) - gap - S(124), S(98), S(124), S(32));
+            }
+
+            if (cardSize != null)
+            {
+                cardSize.SetBounds(m, S(242), w - m * 2, S(152));
+                int btnW = S(114);
+                int applyX = cardSize.Width - pad - btnW;
+                btnApplySize.SetBounds(applyX, S(52), btnW, S(38));
+                int sw = applyX - S(24) - pad;
+                if (sw < S(140)) sw = S(140);
+                slider.SetBounds(pad, S(52), sw, S(38));
+                lblSizeValue.SetBounds(cardSize.Width - S(210), S(12), S(192), S(24));
+                if (lblHint != null) lblHint.SetBounds(pad, S(96), cardSize.Width - S(200), S(20));
+                lblActual.SetBounds(pad, S(120), cardSize.Width - S(40), S(20));
+            }
+
+            if (cardPreview != null)
+            {
+                int top = S(404);
+                int bh = h - top - S(64);
+                if (bh < S(140)) bh = S(140);
+                cardPreview.SetBounds(m, top, w - m * 2, bh);
+                flow.SetBounds(S(12), S(44), cardPreview.Width - S(24), cardPreview.Height - S(56));
+            }
+
+            if (lblStatus != null) lblStatus.SetBounds(S(28), h - S(44), w - S(56), S(24));
+        }
+
+        private int HitEdge(Point p)
+        {
+            if (WindowState != FormWindowState.Normal) return 0;
+            int g = S(7);
+            int w = ClientSize.Width, h = ClientSize.Height;
+            bool left = p.X <= g, right = p.X >= w - g;
+            bool top = p.Y <= g, bottom = p.Y >= h - g;
+            if (left && top) return Shell.HTTOPLEFT;
+            if (right && top) return Shell.HTTOPRIGHT;
+            if (left && bottom) return Shell.HTBOTTOMLEFT;
+            if (right && bottom) return Shell.HTBOTTOMRIGHT;
+            if (left) return Shell.HTLEFT;
+            if (right) return Shell.HTRIGHT;
+            if (top) return Shell.HTTOP;
+            if (bottom) return Shell.HTBOTTOM;
+            return 0;
+        }
+
+        private static Cursor CursorForEdge(int edge)
+        {
+            switch (edge)
+            {
+                case Shell.HTTOPLEFT:
+                case Shell.HTBOTTOMRIGHT:
+                    return Cursors.SizeNWSE;
+                case Shell.HTTOPRIGHT:
+                case Shell.HTBOTTOMLEFT:
+                    return Cursors.SizeNESW;
+                case Shell.HTTOP:
+                case Shell.HTBOTTOM:
+                    return Cursors.SizeNS;
+                default:
+                    return Cursors.SizeWE;
+            }
+        }
+
+        private void RestoreArrowCursor()
+        {
+            int lv = slider != null ? slider.Value : CursorWorks.CurrentSize();
+            if (lv < 1) lv = 1;
+            int px = 32 + (lv - 1) * 8;
+            Cursor = AppCursors.ArrowForPx(px) ?? Cursors.Default;
+        }
+
+        private int dragEdge;
+        private Point dragOrigin;
+        private Rectangle dragRect;
+        private bool resizing;
+
+        private void HookResize(Control c)
+        {
+            c.MouseMove += delegate(object s, MouseEventArgs e)
+            {
+                if (resizing)
+                {
+                    ApplyDragResize();
+                    return;
+                }
+                Point p = PointToClient(c.PointToScreen(e.Location));
+                int edge = HitEdge(p);
+                if (edge != 0) Cursor = CursorForEdge(edge);
+                else RestoreArrowCursor();
+            };
+            c.MouseDown += delegate(object s, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left) return;
+                Point p = PointToClient(c.PointToScreen(e.Location));
+                int edge = HitEdge(p);
+                if (edge == 0) return;
+                dragEdge = edge;
+                dragOrigin = Cursor.Position;
+                dragRect = Bounds;
+                resizing = true;
+                Capture = true;
+            };
+            c.MouseUp += delegate
+            {
+                if (!resizing) return;
+                resizing = false;
+                dragEdge = 0;
+                Capture = false;
+            };
+            c.MouseLeave += delegate
+            {
+                if (resizing || WindowState != FormWindowState.Normal) return;
+                RestoreArrowCursor();
+            };
+        }
+
+        private void ApplyDragResize()
+        {
+            if (dragEdge == 0) return;
+            Point cur = Cursor.Position;
+            int dx = cur.X - dragOrigin.X;
+            int dy = cur.Y - dragOrigin.Y;
+            Rectangle r = dragRect;
+            int minW = S(660), minH = S(720);
+
+            switch (dragEdge)
+            {
+                case Shell.HTLEFT:
+                    r.X += dx; r.Width -= dx; break;
+                case Shell.HTRIGHT:
+                    r.Width += dx; break;
+                case Shell.HTTOP:
+                    r.Y += dy; r.Height -= dy; break;
+                case Shell.HTBOTTOM:
+                    r.Height += dy; break;
+                case Shell.HTTOPLEFT:
+                    r.X += dx; r.Y += dy; r.Width -= dx; r.Height -= dy; break;
+                case Shell.HTTOPRIGHT:
+                    r.Y += dy; r.Width += dx; r.Height -= dy; break;
+                case Shell.HTBOTTOMLEFT:
+                    r.X += dx; r.Width -= dx; r.Height += dy; break;
+                case Shell.HTBOTTOMRIGHT:
+                    r.Width += dx; r.Height += dy; break;
+            }
+
+            if (r.Width < minW)
+            {
+                if (dragEdge == Shell.HTLEFT || dragEdge == Shell.HTTOPLEFT || dragEdge == Shell.HTBOTTOMLEFT)
+                    r.X = dragRect.Right - minW;
+                r.Width = minW;
+            }
+            if (r.Height < minH)
+            {
+                if (dragEdge == Shell.HTTOP || dragEdge == Shell.HTTOPLEFT || dragEdge == Shell.HTTOPRIGHT)
+                    r.Y = dragRect.Bottom - minH;
+                r.Height = minH;
+            }
+            Bounds = r;
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            LayoutAll();
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
@@ -940,20 +1247,22 @@ namespace CursorStudioApp
 
         private void DragWindow(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
-            {
-                Shell.ReleaseCapture();
-                Shell.SendMessage(Handle, Shell.WM_NCLBUTTONDOWN, (IntPtr)Shell.HTCAPTION, IntPtr.Zero);
-            }
+            if (e.Button != MouseButtons.Left) return;
+            Control c = (Control)sender;
+            Point p = PointToClient(c.PointToScreen(e.Location));
+            if (HitEdge(p) != 0) return;      // 窗口边缘交给缩放
+            Shell.ReleaseCapture();
+            Shell.SendMessage(Handle, Shell.WM_NCLBUTTONDOWN, (IntPtr)Shell.HTCAPTION, IntPtr.Zero);
         }
 
         private void BuildHeader()
         {
-            Panel head = new Panel();
+            head = new Panel();
             head.SetBounds(0, 0, ClientSize.Width, 68);
             head.BackColor = Theme.Bg;
             head.MouseDown += DragWindow;
             Controls.Add(head);
+            HookResize(head);
 
             Panel logo = new Panel();
             logo.SetBounds(24, 16, 40, 40);
@@ -1003,15 +1312,16 @@ namespace CursorStudioApp
             sub.MouseDown += DragWindow;
             head.Controls.Add(sub);
 
-            RoundIconButton min = new RoundIconButton("—", false);
-            min.SetBounds(ClientSize.Width - 80, 18, 32, 32);
-            min.OnClickAction = delegate { WindowState = FormWindowState.Minimized; };
-            head.Controls.Add(min);
-
-            RoundIconButton close = new RoundIconButton("✕", true);
-            close.SetBounds(ClientSize.Width - 44, 18, 32, 32);
-            close.OnClickAction = delegate { Close(); };
-            head.Controls.Add(close);
+            // macOS 红绿灯：绿（最大化/还原）· 黄（最小化）· 红（关闭，最右）
+            dots = new TrafficDots();
+            dots.Location = new Point(ClientSize.Width - 160, 20);
+            dots.OnDot = delegate(int idx)
+            {
+                if (idx == 2) { Close(); return; }
+                if (idx == 1) { WindowState = FormWindowState.Minimized; return; }
+                WindowState = (WindowState == FormWindowState.Maximized) ? FormWindowState.Normal : FormWindowState.Maximized;
+            };
+            head.Controls.Add(dots);
         }
 
         private Label CardTitle(CardPanel card, string text)
@@ -1031,6 +1341,7 @@ namespace CursorStudioApp
             CardPanel card = new CardPanel();
             card.SetBounds(24, 84, ClientSize.Width - 48, 146);
             Controls.Add(card);
+            cardScheme = card;
             CardTitle(card, "指针方案");
 
             // 路径不再显示在界面上（已有「打开自定义文件夹」按钮）
@@ -1076,7 +1387,7 @@ namespace CursorStudioApp
             };
             card.Controls.Add(btnReload);
 
-            ModernButton btnCustom = new ModernButton("打开自定义文件夹", false);
+            btnCustom = new ModernButton("打开自定义文件夹", false);
             btnCustom.SetBounds(422, 98, 152, 32);
             btnCustom.Click += delegate
             {
@@ -1091,6 +1402,7 @@ namespace CursorStudioApp
             CardPanel card = new CardPanel();
             card.SetBounds(24, 242, ClientSize.Width - 48, 152);
             Controls.Add(card);
+            cardSize = card;
             CardTitle(card, "指针大小");
 
             lblSizeValue = new Label();
@@ -1120,6 +1432,7 @@ namespace CursorStudioApp
             hint.BackColor = Theme.Card;
             hint.SetBounds(18, 96, card.Width - 200, 20);
             card.Controls.Add(hint);
+            lblHint = hint;
 
             lblActual = new Label();
             lblActual.Font = Theme.F(8.5f, FontStyle.Regular);
@@ -1136,6 +1449,7 @@ namespace CursorStudioApp
             CardPanel card = new CardPanel();
             card.SetBounds(24, top, ClientSize.Width - 48, height);
             Controls.Add(card);
+            cardPreview = card;
             CardTitle(card, "指针形态预览");
 
             flow = new FlowLayoutPanel();
