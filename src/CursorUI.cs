@@ -52,6 +52,8 @@ namespace CursorStudioApp
 
     internal static class AppCursors
     {
+        private static readonly Dictionary<int, Cursor> handCache = new Dictionary<int, Cursor>();
+        private static readonly Dictionary<int, Cursor> arrowCache = new Dictionary<int, Cursor>();
         private static Cursor hand;
         private static int handPx = -1;
         private static Cursor arrow;
@@ -59,6 +61,8 @@ namespace CursorStudioApp
 
         internal static void Reset()
         {
+            handCache.Clear();
+            arrowCache.Clear();
             handPx = -1;
             arrowPx = -1;
             hand = null;
@@ -81,18 +85,24 @@ namespace CursorStudioApp
         {
             px = Clamp(px);
             if (hand != null && handPx == px) return hand;
+            Cursor c;
+            if (handCache.ContainsKey(px)) c = handCache[px];
+            else { c = Build("Hand", px); handCache[px] = c; }
             handPx = px;
-            hand = Build("Hand", px);
-            return hand;
+            hand = c;
+            return c;
         }
 
         internal static Cursor ArrowForPx(int px)
         {
             px = Clamp(px);
             if (arrow != null && arrowPx == px) return arrow;
+            Cursor c;
+            if (arrowCache.ContainsKey(px)) c = arrowCache[px];
+            else { c = Build("Arrow", px); arrowCache[px] = c; }
             arrowPx = px;
-            arrow = Build("Arrow", px);
-            return arrow;
+            arrow = c;
+            return c;
         }
 
         private static int Clamp(int px)
@@ -570,14 +580,33 @@ namespace CursorStudioApp
         private int max = 15;
         private int value = 1;
         private bool dragging;
+        private bool hover;
+        private float knobT;                  // 悬停/拖动时滑块放大与光晕的进度 0..1
+        private Timer anim;
         internal Action<int> OnChanged;
+        internal Action<int> OnDragEnd;
 
         internal ModernSlider()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Font = Theme.F(9f, FontStyle.Regular);
-            Height = 36;
+            BackColor = Theme.Card;      // 卡片是白的，滑块自己别再把卡片底色画成一块灰
+            Height = 38;
             Cursor = AppCursors.Hand() ?? Cursors.Hand;
+            anim = new Timer();
+            anim.Interval = 15;
+            anim.Tick += AnimTick;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && anim != null)
+            {
+                anim.Stop();
+                anim.Dispose();
+                anim = null;
+            }
+            base.Dispose(disposing);
         }
 
         internal int Minimum { get { return min; } set { min = value; Invalidate(); } }
@@ -596,7 +625,7 @@ namespace CursorStudioApp
             }
         }
 
-        private int Pad() { return 12; }
+        private int Pad() { return (int)Math.Round(13 * Theme.K); }
 
         private int ValueFromX(int x)
         {
@@ -609,11 +638,47 @@ namespace CursorStudioApp
             return min + (int)Math.Round(ratio * (max - min));
         }
 
+        private void Wake()
+        {
+            if (anim != null && !anim.Enabled) anim.Start();
+        }
+
+        private void AnimTick(object sender, EventArgs e)
+        {
+            float target = (hover || dragging) ? 1f : 0f;
+            float d = target - knobT;
+            if (Math.Abs(d) <= 0.04f)
+            {
+                knobT = target;
+                if (anim != null) anim.Stop();
+            }
+            else
+            {
+                knobT += d * 0.34f;
+            }
+            Invalidate();
+        }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            hover = true;
+            Wake();
+            base.OnMouseEnter(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            hover = false;
+            Wake();
+            base.OnMouseLeave(e);
+        }
+
         protected override void OnMouseDown(MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
             {
                 dragging = true;
+                Wake();
                 SetByX(e.X);
             }
             base.OnMouseDown(e);
@@ -628,7 +693,9 @@ namespace CursorStudioApp
         protected override void OnMouseUp(MouseEventArgs e)
         {
             dragging = false;
+            Wake();
             base.OnMouseUp(e);
+            if (OnDragEnd != null) OnDragEnd(value);
         }
 
         private void SetByX(int x)
@@ -655,12 +722,14 @@ namespace CursorStudioApp
                 value--;
                 Invalidate();
                 if (OnChanged != null) OnChanged(value);
+                if (OnDragEnd != null) OnDragEnd(value);
             }
             else if (e.KeyCode == Keys.Right && value < max)
             {
                 value++;
                 Invalidate();
                 if (OnChanged != null) OnChanged(value);
+                if (OnDragEnd != null) OnDragEnd(value);
             }
             base.OnKeyDown(e);
         }
@@ -669,29 +738,60 @@ namespace CursorStudioApp
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+            float k = Theme.K;
             int left = Pad();
             int right = Width - Pad();
+            if (right <= left + 4) return;
             int cy = Height / 2;
-            Rectangle track = new Rectangle(left, cy - 3, right - left, 6);
-            using (GraphicsPath p = Theme.Round(track, 3))
+            int th = (int)Math.Max(4, Math.Round(6 * k));      // 轨道比原来细一点
+            float r = 9.5f * k + 2f * k * knobT;               // 悬停时滑块略微长大
+
+            int knobX = left + (int)Math.Round((double)(value - min) / (double)(max - min) * (right - left));
+
+            // 轨道底：上深下浅一点点，看着像条浅槽而不是一条实心色带
+            Rectangle track = new Rectangle(left, cy - th / 2, right - left, th);
+            using (GraphicsPath p = Theme.Round(track, th / 2))
+            using (LinearGradientBrush tb = new LinearGradientBrush(
+                       new Rectangle(track.X, track.Y, Math.Max(2, track.Width), Math.Max(2, track.Height)),
+                       Color.FromArgb(211, 219, 233), Color.FromArgb(232, 237, 245), LinearGradientMode.Vertical))
+                g.FillPath(tb, p);
+
+            // 已选段：左深右浅的横向渐变，末端藏在滑块底下
+            int fillW = knobX - left;
+            if (fillW > 1)
             {
-                using (SolidBrush b = new SolidBrush(Theme.Track)) g.FillPath(b, p);
+                Rectangle fill = new Rectangle(left, cy - th / 2, fillW, th);
+                using (GraphicsPath p = Theme.Round(fill, th / 2))
+                using (LinearGradientBrush lb = new LinearGradientBrush(
+                           new Rectangle(left, cy - th, Math.Max(2, fillW), th * 2),
+                           Theme.Primary, Color.FromArgb(104, 166, 248), LinearGradientMode.Horizontal))
+                    g.FillPath(lb, p);
             }
-            int knobX = left + (int)Math.Round(((double)(value - min) / (double)(max - min)) * (right - left));
-            if (knobX > left)
+
+            // 投影：两层很淡的同心圆贴着滑块走，别铺太宽，否则会像一圈灰边
+            for (int i = 2; i >= 1; i--)
             {
-                Rectangle fill = new Rectangle(left, cy - 3, knobX - left, 6);
-                using (GraphicsPath p = Theme.Round(fill, 3))
-                {
-                    using (SolidBrush b = new SolidBrush(Theme.Primary)) g.FillPath(b, p);
-                }
+                float sr = r + i * 1.5f * k;
+                using (SolidBrush sb = new SolidBrush(Color.FromArgb(i == 1 ? 16 : 7, 28, 54, 104)))
+                    g.FillEllipse(sb, knobX - sr, cy - sr + 1.2f * k, sr * 2, sr * 2);
             }
-            Rectangle knob = new Rectangle(knobX - 8, cy - 8, 16, 16);
-            using (GraphicsPath p = Theme.Round(knob, 8))
+
+            // 悬停 / 拖动光晕
+            if (knobT > 0.01f)
             {
-                using (SolidBrush b = new SolidBrush(Color.White)) g.FillPath(b, p);
-                using (Pen pen = new Pen(Theme.Primary, 3f)) g.DrawPath(pen, p);
+                float hr = r + 5.5f * k * knobT;
+                using (SolidBrush hb = new SolidBrush(Color.FromArgb((int)(30 * knobT), Theme.Primary)))
+                    g.FillEllipse(hb, knobX - hr, cy - hr, hr * 2, hr * 2);
             }
+
+            // 滑块本体
+            using (SolidBrush b = new SolidBrush(Color.White))
+                g.FillEllipse(b, knobX - r, cy - r, r * 2, r * 2);
+            Color ring = knobT > 0.5f ? Theme.Primary : Color.FromArgb(183, 197, 218);
+            using (Pen pen = new Pen(ring, Math.Max(1.1f, 1.25f * k)))
+                g.DrawEllipse(pen, knobX - r, cy - r, r * 2, r * 2);
         }
     }
 
@@ -720,70 +820,103 @@ namespace CursorStudioApp
 
     internal class CursorTile : Control
     {
-        private string path;
         private Bitmap img;
+        private Bitmap cache;      // 整块格子的离屏快照：只在悬停/尺寸变化时重画，逐帧只做一次贴图
         private bool hover;
+        private int icon;
 
         internal CursorTile(string title, string cursorPath)
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Text = title;
-            path = cursorPath;
+            icon = Theme.Px(46);
             Size = new Size(Theme.Px(108), Theme.Px(86));
             Font = Theme.F(8.5f, FontStyle.Regular);
-            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            if (!string.IsNullOrEmpty(cursorPath) && File.Exists(cursorPath))
             {
-                img = CursorWorks.LoadCursorBitmap(path, Theme.Px(96));
+                // 直接按最终绘制尺寸解码，画的时候 1:1 贴图，不再每帧做一次高质量重采样
+                img = CursorWorks.LoadCursorBitmap(cursorPath, icon);
             }
         }
 
-        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseEnter(EventArgs e) { SetHover(true); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { SetHover(false); base.OnMouseLeave(e); }
+
+        private void SetHover(bool on)
+        {
+            if (hover == on) return;
+            hover = on;
+            DropCache();
+            Invalidate();
+        }
+
+        private void DropCache()
+        {
+            if (cache != null)
+            {
+                Bitmap b = cache;
+                cache = null;
+                try { b.Dispose(); } catch { }
+            }
+        }
 
         protected override void Dispose(bool disposing)
         {
-            if (img != null)
+            if (disposing)
             {
-                try { img.Dispose(); } catch { }
-                img = null;
+                DropCache();
+                if (img != null)
+                {
+                    try { img.Dispose(); } catch { }
+                    img = null;
+                }
             }
             base.Dispose(disposing);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (GraphicsPath p = Theme.Round(r, Theme.Px(10)))
+            if (cache == null || cache.Width != Width || cache.Height != Height) BuildCache();
+            if (cache != null) e.Graphics.DrawImageUnscaled(cache, 0, 0);
+        }
+
+        private void BuildCache()
+        {
+            DropCache();
+            if (Width <= 0 || Height <= 0) return;
+            Bitmap bmp = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bmp))
             {
-                using (SolidBrush b = new SolidBrush(hover ? Color.FromArgb(248, 251, 255) : Color.White)) g.FillPath(b, p);
-                using (Pen pen = new Pen(hover ? Theme.BorderFocus : Theme.Border, 1f)) g.DrawPath(pen, p);
-            }
-            if (img != null)
-            {
-                int icon = Theme.Px(46);
-                int ix = (Width - icon) / 2;
-                int iy = Theme.Px(7);
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.CompositingQuality = CompositingQuality.HighQuality;
-                g.DrawImage(img, new Rectangle(ix, iy, icon, icon), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel);
-            }
-            else
-            {
-                int ph2 = Theme.Px(32);
-                Rectangle ph = new Rectangle((Width - ph2) / 2, Theme.Px(12), ph2, ph2);
-                using (Pen pen = new Pen(Color.FromArgb(210, 216, 226), 1.4f)) g.DrawRectangle(pen, ph);
-                using (Pen pen = new Pen(Color.FromArgb(210, 216, 226), 1.2f))
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Theme.Card);                       // 卡片底色，四角不留透明残留
+                Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+                using (GraphicsPath p = Theme.Round(r, Theme.Px(10)))
                 {
-                    g.DrawLine(pen, ph.Left, ph.Top, ph.Right, ph.Bottom);
-                    g.DrawLine(pen, ph.Right, ph.Top, ph.Left, ph.Bottom);
+                    using (SolidBrush b = new SolidBrush(hover ? Color.FromArgb(248, 251, 255) : Color.White)) g.FillPath(b, p);
+                    using (Pen pen = new Pen(hover ? Theme.BorderFocus : Theme.Border, 1f)) g.DrawPath(pen, p);
                 }
+                if (img != null)
+                {
+                    int ix = (Width - icon) / 2;
+                    int iy = Theme.Px(7);
+                    g.DrawImage(img, ix, iy, icon, icon);
+                }
+                else
+                {
+                    int ph2 = Theme.Px(32);
+                    Rectangle ph = new Rectangle((Width - ph2) / 2, Theme.Px(12), ph2, ph2);
+                    using (Pen pen = new Pen(Color.FromArgb(210, 216, 226), 1.4f)) g.DrawRectangle(pen, ph);
+                    using (Pen pen = new Pen(Color.FromArgb(210, 216, 226), 1.2f))
+                    {
+                        g.DrawLine(pen, ph.Left, ph.Top, ph.Right, ph.Bottom);
+                        g.DrawLine(pen, ph.Right, ph.Top, ph.Left, ph.Bottom);
+                    }
+                }
+                Rectangle tr = new Rectangle(Theme.Px(4), Theme.Px(54), Width - Theme.Px(8), Theme.Px(28));
+                TextRenderer.DrawText(g, Text, Font, tr, hover ? Theme.Primary : Theme.TextSub,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
             }
-            Rectangle tr = new Rectangle(Theme.Px(4), Theme.Px(54), Width - Theme.Px(8), Theme.Px(28));
-            TextRenderer.DrawText(g, Text, Font, tr, hover ? Theme.Primary : Theme.TextSub,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+            cache = bmp;
         }
     }
 
@@ -834,26 +967,44 @@ namespace CursorStudioApp
 
     internal class TrafficDots : Control
     {
-        internal Action<int> OnDot;   // 0 = 绿（最大化/还原）、1 = 黄（最小化）、2 = 红（关闭）
+        internal Action<int> OnDot;   // 0 = 黄（最小化）、1 = 绿（最大化/还原）、2 = 红（关闭）
         internal bool Maximized;
 
         private int hover = -1;
         private int dot, gap, pad;
+        private readonly float[] appear = new float[3];   // 每个圆点字形的浮现进度 0..1
+        private Timer anim;
 
         private static readonly Color Green = Color.FromArgb(40, 205, 65);
+        private static readonly Color GreenHot = Color.FromArgb(52, 217, 79);
         private static readonly Color Yellow = Color.FromArgb(254, 189, 46);
+        private static readonly Color YellowHot = Color.FromArgb(255, 200, 68);
         private static readonly Color Red = Color.FromArgb(255, 96, 89);
+        private static readonly Color RedHot = Color.FromArgb(255, 113, 105);
 
         internal TrafficDots()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             float k = Theme.K;
-            dot = (int)Math.Round(12 * k);
-            gap = (int)Math.Round(8 * k);
-            pad = (int)Math.Round(4 * k);
+            dot = (int)Math.Round(20 * k);
+            gap = (int)Math.Round(11 * k);
+            pad = (int)Math.Round(5 * k);
             BackColor = Theme.Bg;
-            Font = Theme.F(7.5f, FontStyle.Bold);
             Size = new Size(dot * 3 + gap * 2 + pad * 2, dot + pad * 2);
+            anim = new Timer();
+            anim.Interval = 15;
+            anim.Tick += AnimTick;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && anim != null)
+            {
+                anim.Stop();
+                anim.Dispose();
+                anim = null;
+            }
+            base.Dispose(disposing);
         }
 
         private int DotX(int i) { return (Width - (dot * 3 + gap * 2)) / 2 + i * (dot + gap); }
@@ -871,48 +1022,170 @@ namespace CursorStudioApp
             return -1;
         }
 
+        private void SetHover(int idx)
+        {
+            if (idx == hover) return;
+            hover = idx;
+            if (anim != null) anim.Start();
+        }
+
+        private void AnimTick(object sender, EventArgs e)
+        {
+            bool busy = false;
+            for (int i = 0; i < 3; i++)
+            {
+                float target = (hover == i) ? 1f : 0f;
+                float d = target - appear[i];
+                if (Math.Abs(d) <= 0.03f) appear[i] = target;
+                else { appear[i] += d * 0.34f; busy = true; }
+            }
+            Invalidate();
+            if (!busy && anim != null) anim.Stop();
+        }
+
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            int idx = IndexAt(e.Location);
-            if (idx != hover) { hover = idx; Invalidate(); }
+            SetHover(IndexAt(e.Location));
             base.OnMouseMove(e);
         }
 
         protected override void OnMouseLeave(EventArgs e)
         {
-            hover = -1;
-            Invalidate();
+            SetHover(-1);
             base.OnMouseLeave(e);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
+            SetHover(IndexAt(e.Location));
+            base.OnMouseDown(e);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
             if (e.Button == MouseButtons.Left)
             {
                 int idx = IndexAt(e.Location);
-                if (idx >= 0 && OnDot != null) OnDot(idx);
+                if (idx >= 0 && idx == hover && OnDot != null) OnDot(idx);
             }
-            base.OnMouseDown(e);
+            base.OnMouseUp(e);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            Color[] cols = new Color[] { Green, Yellow, Red };
-            string[] glyphs = new string[] { Maximized ? "－" : "＋", "－", "✕" };
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            Color[] baseCols = new Color[] { Yellow, Green, Red };
+            Color[] hotCols = new Color[] { YellowHot, GreenHot, RedHot };
             for (int i = 0; i < 3; i++)
             {
-                Rectangle r = new Rectangle(DotX(i), DotY, dot, dot);
-                using (SolidBrush b = new SolidBrush(cols[i])) g.FillEllipse(b, r);
-                if (hover == i)
+                float t = appear[i];
+                RectangleF r = new RectangleF(DotX(i), DotY, dot, dot);
+                Color fill = t <= 0.001f ? baseCols[i] : Mix(baseCols[i], hotCols[i], t);
+                using (SolidBrush b = new SolidBrush(fill)) g.FillEllipse(b, r);
+                if (t <= 0.02f) continue;
+                using (Pen ring = new Pen(Color.FromArgb((int)Math.Round(52 * t), 18, 18, 18), 1f))
+                    g.DrawEllipse(ring, r.X + 0.5f, r.Y + 0.5f, r.Width - 1f, r.Height - 1f);
+                DrawGlyph(g, i, t, fill, r);
+            }
+        }
+
+        // 字形一律用矢量笔画手绘：以圆心为基准对称展开，天然居中，
+        // 尺寸按圆点直径的固定比例算，换 DPI 时自动跟着圆点一起放大缩小。
+        private void DrawGlyph(Graphics g, int idx, float t, Color dotFill, RectangleF r)
+        {
+            float cx = r.X + r.Width / 2f;
+            float cy = r.Y + r.Height / 2f;
+            cx = (float)Math.Round(cx * 2f) / 2f;      // 半像素对齐，笔画不发虚
+            cy = (float)Math.Round(cy * 2f) / 2f;
+            float grow = 0.76f + 0.24f * t;            // 浮现瞬间略小，落到 1.0 时正好铺满
+            float s = dot * 0.215f * grow;             // 字形半边长：留出约 28% 的边距，不贴圆点外沿
+            float w = Math.Max(1.25f, dot * 0.082f);   // 线宽随圆点缩放
+            int alpha = (int)Math.Round(212 * t);
+            using (Pen pen = new Pen(Color.FromArgb(alpha, 26, 26, 28), w))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                pen.LineJoin = LineJoin.Round;
+
+                if (idx == 2)
                 {
-                    using (Pen p = new Pen(Color.FromArgb(90, 0, 0, 0), 1f)) g.DrawEllipse(p, r);
-                    Rectangle tr = new Rectangle(r.X - gap / 2, r.Y - gap / 2, r.Width + gap, r.Height + gap);
-                    TextRenderer.DrawText(g, glyphs[i], Font, tr, Color.FromArgb(130, 20, 20, 20),
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    float d = s * 0.78f;               // 叉号的对角线最占地方，收得比横竖更小一点
+                    g.DrawLine(pen, cx - d, cy - d, cx + d, cy + d);
+                    g.DrawLine(pen, cx - d, cy + d, cx + d, cy - d);
+                }
+                else if (idx == 0)
+                {
+                    g.DrawLine(pen, cx - s, cy, cx + s, cy);
+                }
+                else if (!Maximized)
+                {
+                    float d = s * 0.88f;
+                    g.DrawLine(pen, cx - d, cy, cx + d, cy);
+                    g.DrawLine(pen, cx, cy - d, cx, cy + d);
+                }
+                else
+                {
+                    DrawRestore(g, pen, dotFill, cx, cy, s);
                 }
             }
+        }
+
+        // 还原：两个叠放的方框（后框先描，前框用圆点底色盖住再描，小尺寸也不会糊成一团）
+        private static void DrawRestore(Graphics g, Pen pen, Color dotFill, float cx, float cy, float s)
+        {
+            float s2 = s * 0.86f;              // 方框的笔画落在包围盒最外沿，比横竖更显大，所以整体再收一点
+            float o = s2 * 0.58f;
+            float b = s2 - o / 2f;
+            RectangleF back = new RectangleF(cx - b + o / 2f, cy - b - o / 2f, b * 2f, b * 2f);
+            RectangleF front = new RectangleF(cx - b - o / 2f, cy - b + o / 2f, b * 2f, b * 2f);
+            g.DrawRectangle(pen, back.X, back.Y, back.Width, back.Height);
+            using (SolidBrush bf = new SolidBrush(dotFill)) g.FillRectangle(bf, front);
+            g.DrawRectangle(pen, front.X, front.Y, front.Width, front.Height);
+        }
+
+        private static Color Mix(Color a, Color b, float t)
+        {
+            if (t <= 0f) return a;
+            if (t >= 1f) return b;
+            return Color.FromArgb(
+                (int)Math.Round(a.R + (b.R - a.R) * t),
+                (int)Math.Round(a.G + (b.G - a.G) * t),
+                (int)Math.Round(a.B + (b.B - a.B) * t));
+        }
+    }
+
+    // 最小化动画用的快照层：整个界面被拍成一张图，随窗口一起缩小
+    internal class SnapshotView : Control
+    {
+        private Bitmap src;
+
+        internal SnapshotView(Bitmap bmp)
+        {
+            src = bmp;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+                | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Theme.Bg;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            if (src == null) return;
+            Graphics g = e.Graphics;
+            g.InterpolationMode = InterpolationMode.Bilinear;   // 缩小时用双线性就够，且便宜
+            g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+            g.DrawImage(src, new Rectangle(0, 0, Width, Height));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && src != null)
+            {
+                try { src.Dispose(); } catch { }
+                src = null;
+            }
+            base.Dispose(disposing);
         }
     }
 
@@ -940,6 +1213,20 @@ namespace CursorStudioApp
         private CardPanel cardScheme;
         private CardPanel cardSize;
         private CardPanel cardPreview;
+        private bool maximized;
+        private Rectangle restoreRect;
+        private Rectangle animFrom;
+        private Rectangle animTo;
+        private bool animToMax;
+        private bool animating;
+        private bool skipLayout;
+        private Rectangle miniRestore;
+        private System.Diagnostics.Stopwatch animClock;
+        private double animDur;
+        private int skinnedPx = -1;
+        private int actualPx = 32;
+        private Timer warmTimer;
+        private int warmIdx = 1;
         private static Bitmap appIconCache;
 
         internal static Bitmap AppIconBitmap()
@@ -1018,6 +1305,7 @@ namespace CursorStudioApp
         {
             foreach (Control c in parent.Controls)
             {
+                if (c is TrafficDots) continue;   // 红绿灯自绘且已按 DPI 自带换算，不再二次缩放
                 c.Location = new Point((int)Math.Round(c.Left * k), (int)Math.Round(c.Top * k));
                 c.Size = new Size((int)Math.Round(c.Width * k), (int)Math.Round(c.Height * k));
                 c.Padding = new Padding((int)Math.Round(c.Padding.Left * k), (int)Math.Round(c.Padding.Top * k),
@@ -1030,8 +1318,10 @@ namespace CursorStudioApp
 
         private int S(int v) { return (int)Math.Round(v * Theme.K); }
 
+
         private void LayoutAll()
         {
+            if (skipLayout) return;            // 最小化动画期间只画快照，不重排
             int w = ClientSize.Width;
             int h = ClientSize.Height;
             if (w < 200 || h < 200) return;
@@ -1041,9 +1331,9 @@ namespace CursorStudioApp
             if (head != null) head.SetBounds(0, 0, w, S(68));
             if (dots != null)
             {
-                dots.Location = new Point(w - S(18) - dots.Width, S(18));
-                dots.Maximized = (WindowState == FormWindowState.Maximized);
-                dots.Invalidate();
+                Point dp = new Point(w - S(18) - dots.Width, S(18));
+                if (dots.Location != dp) dots.Location = dp;
+                if (dots.Maximized != maximized) { dots.Maximized = maximized; dots.Invalidate(); }
             }
 
             if (cardScheme != null)
@@ -1095,8 +1385,169 @@ namespace CursorStudioApp
             if (lblStatus != null) lblStatus.SetBounds(S(28), h - S(44), w - S(56), S(24));
         }
 
+        private void ToggleMaximize()
+        {
+            Rectangle area = Screen.FromControl(this).WorkingArea;
+            bool toMax = !maximized;
+            Rectangle to;
+            if (toMax)
+            {
+                if (!animating) restoreRect = Bounds;      // 动画中途再点，沿用最初的还原尺寸
+                to = area;
+            }
+            else
+            {
+                to = restoreRect;
+                if (to.Width < S(660) || to.Height < S(720))
+                    to = new Rectangle(area.X + (area.Width - S(860)) / 2, area.Y + (area.Height - S(944)) / 2, S(860), S(944));
+            }
+            AnimWindow(to, toMax);
+        }
+
+        // 帧循环：动画与拖边缩放共用。原来靠 15 ms 定时器，每次都要「等定时器 + 干活」，
+        // 实测满屏放大只跑出 13 帧、每帧跳 82 px；改成自己驱动帧，机器能画多快就跑多快。
+        private bool inFrame;
+
+        private bool RunFrames(Func<bool> step)
+        {
+            if (inFrame) return false;          // 已经在循环里了，交给外层
+            inFrame = true;
+            try
+            {
+                while (!IsDisposed && step()) { }
+            }
+            catch { }
+            finally { inFrame = false; }
+            return true;
+        }
+
+        private bool ApplyAnim(double k)
+        {
+            int x = (int)Math.Round(animFrom.X + (animTo.X - animFrom.X) * k);
+            int y = (int)Math.Round(animFrom.Y + (animTo.Y - animFrom.Y) * k);
+            int w = (int)Math.Round(animFrom.Width + (animTo.Width - animFrom.Width) * k);
+            int h = (int)Math.Round(animFrom.Height + (animTo.Height - animFrom.Height) * k);
+            if (w < 1) w = 1;
+            if (h < 1) h = 1;
+            if (x == Left && y == Top && w == Width && h == Height) return false;
+            Bounds = new Rectangle(x, y, w, h);
+            return true;
+        }
+
+        private void AnimWindow(Rectangle to, bool toMax)
+        {
+            animFrom = Bounds;
+            animTo = to;
+            animToMax = toMax;
+            maximized = toMax;
+            if (dots != null) { dots.Maximized = toMax; dots.Invalidate(); }
+
+            if (animFrom == animTo) { FinishAnim(); return; }
+
+            if (animClock == null) animClock = new System.Diagnostics.Stopwatch();
+            animClock.Reset();
+            animClock.Start();
+
+            // 实测这台机器满屏一帧要 25~35 ms（重排 + 3.9 MP 重绘），帧数只跟时长成正比：
+            // 0.24~0.34 s 是「够快」和「帧够多」的折中，再拖长就成慢动作，再收短每帧跳得更狠。
+            double span = Math.Max(Math.Abs(animTo.Width - animFrom.Width), Math.Abs(animTo.Height - animFrom.Height));
+            animDur = 240.0 + Math.Min(100.0, span * 0.06);
+            animating = true;
+
+            bool owner = RunFrames(delegate
+            {
+                double p = animClock.Elapsed.TotalMilliseconds / animDur;
+                if (p >= 1.0) return false;
+                double k = p * p * (3.0 - 2.0 * p);      // smoothstep：起步轻、落点稳，不甩尾
+                if (ApplyAnim(k)) Application.DoEvents();   // 泵消息，这一帧才会真正画出来
+                return true;
+            });
+            if (!owner) return;                  // 动画途中又点了一下，已改目标，继续由外层跑
+            animating = false;
+            FinishAnim();
+        }
+
+        private void FinishAnim()
+        {
+            if (animClock != null) animClock.Reset();
+            animating = false;
+            maximized = animToMax;
+            if (Bounds != animTo) Bounds = animTo;
+            LayoutAll();
+            if (dots != null) { dots.Maximized = maximized; dots.Invalidate(); }
+        }
+
+        // 最小化到任务栏：先把界面截成一张图，然后窗口一边缩一边用这张图重采样，
+        // 看上去就是整个界面被收进任务栏，而不是「啪」一下消失。
+        // 只动窗口 + 一次图片缩放，所以比重新排版便宜一个数量级。
+        private void MinimizeAnimated()
+        {
+            if (WindowState != FormWindowState.Normal || inFrame || animating)
+            {
+                WindowState = FormWindowState.Minimized;
+                return;
+            }
+
+            Rectangle from = Bounds;
+            Rectangle scr = Screen.FromControl(this).Bounds;
+            int tw = S(86), th = S(62);
+            Rectangle to = new Rectangle(from.X + from.Width / 2 - tw / 2, scr.Bottom - th, tw, th);
+
+            Bitmap snap = null;
+            try
+            {
+                int cw = ClientSize.Width, ch = ClientSize.Height;
+                if (cw > 0 && ch > 0)
+                {
+                    snap = new Bitmap(cw, ch, PixelFormat.Format32bppArgb);
+                    DrawToBitmap(snap, new Rectangle(0, 0, cw, ch));
+                }
+            }
+            catch { snap = null; }
+
+            if (snap == null)
+            {
+                WindowState = FormWindowState.Minimized;
+                return;
+            }
+
+            SnapshotView view = new SnapshotView(snap);
+            view.Dock = DockStyle.Fill;
+            Controls.Add(view);
+            view.BringToFront();
+            skipLayout = true;
+
+            animFrom = from;
+            animTo = to;
+            if (animClock == null) animClock = new System.Diagnostics.Stopwatch();
+            animClock.Reset();
+            animClock.Start();
+            animDur = 240.0;
+
+            RunFrames(delegate
+            {
+                double p = animClock.Elapsed.TotalMilliseconds / animDur;
+                if (p >= 1.0) return false;
+                double k = p * p * (3.0 - 2.0 * p);
+                if (ApplyAnim(k)) Application.DoEvents();
+                return true;
+            });
+
+            try { Controls.Remove(view); view.Dispose(); } catch { }
+            skipLayout = false;
+
+            // 先最小化（窗口不可见），再把尺寸还原成原来的大小，
+            // 这样从任务栏点回来时不会停在缩略尺寸上。
+            WindowState = FormWindowState.Minimized;
+            if (Bounds != from) Bounds = from;
+            miniRestore = from;
+            LayoutAll();
+        }
+
         private int HitEdge(Point p)
         {
+            if (maximized) return 0;
+            if (animating || inFrame) return 0;
             if (WindowState != FormWindowState.Normal) return 0;
             int g = S(7);
             int w = ClientSize.Width, h = ClientSize.Height;
@@ -1148,11 +1599,7 @@ namespace CursorStudioApp
         {
             c.MouseMove += delegate(object s, MouseEventArgs e)
             {
-                if (resizing)
-                {
-                    ApplyDragResize();
-                    return;
-                }
+                if (resizing || inFrame) return;
                 Point p = PointToClient(c.PointToScreen(e.Location));
                 int edge = HitEdge(p);
                 if (edge != 0) Cursor = CursorForEdge(edge);
@@ -1161,6 +1608,7 @@ namespace CursorStudioApp
             c.MouseDown += delegate(object s, MouseEventArgs e)
             {
                 if (e.Button != MouseButtons.Left) return;
+                if (inFrame) return;
                 Point p = PointToClient(c.PointToScreen(e.Location));
                 int edge = HitEdge(p);
                 if (edge == 0) return;
@@ -1169,17 +1617,30 @@ namespace CursorStudioApp
                 dragRect = Bounds;
                 resizing = true;
                 Capture = true;
-            };
-            c.MouseUp += delegate
-            {
-                if (!resizing) return;
+
+                // 拖边期间不再「每个鼠标消息就重排一次」——鼠标消息一秒能来上百个，
+                // 每次都排 15 ms 的版必然积压、越拖越滞后。这里改成按帧推进，只认最新光标位置。
+                Point last = Point.Empty;
+                RunFrames(delegate
+                {
+                    if (!resizing || dragEdge == 0) return false;
+                    Point cur = Cursor.Position;
+                    if (cur != last) { last = cur; ApplyDragResize(); }
+                    Application.DoEvents();
+                    return true;
+                });
+                try { if (dragEdge != 0) ApplyDragResize(); } catch { }   // 松手那一帧也跟上，别停在倒数第二个位置
                 resizing = false;
                 dragEdge = 0;
                 Capture = false;
             };
+            c.MouseUp += delegate
+            {
+                resizing = false;          // 帧循环会自己收尾
+            };
             c.MouseLeave += delegate
             {
-                if (resizing || WindowState != FormWindowState.Normal) return;
+                if (resizing || inFrame || maximized) return;
                 RestoreArrowCursor();
             };
         }
@@ -1231,6 +1692,18 @@ namespace CursorStudioApp
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
+            // 从任务栏还原时，万一还停在收缩动画的尺寸上，把它拉回原尺寸
+            if (!skipLayout && WindowState == FormWindowState.Normal && miniRestore.Width > 0)
+            {
+                if (Width < S(320) || Height < S(320))
+                {
+                    Rectangle r = miniRestore;
+                    miniRestore = Rectangle.Empty;
+                    Bounds = r;
+                    return;
+                }
+                miniRestore = Rectangle.Empty;
+            }
             LayoutAll();
         }
 
@@ -1248,6 +1721,8 @@ namespace CursorStudioApp
         private void DragWindow(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left) return;
+            if (maximized) return;    // 最大化时窗口不跟随拖动
+            if (animating || inFrame) return;
             Control c = (Control)sender;
             Point p = PointToClient(c.PointToScreen(e.Location));
             if (HitEdge(p) != 0) return;      // 窗口边缘交给缩放
@@ -1312,14 +1787,14 @@ namespace CursorStudioApp
             sub.MouseDown += DragWindow;
             head.Controls.Add(sub);
 
-            // macOS 红绿灯：绿（最大化/还原）· 黄（最小化）· 红（关闭，最右）
+            // macOS 红绿灯：黄（最小化）· 绿（最大化/还原）· 红（关闭，最右）
             dots = new TrafficDots();
             dots.Location = new Point(ClientSize.Width - 160, 20);
             dots.OnDot = delegate(int idx)
             {
                 if (idx == 2) { Close(); return; }
-                if (idx == 1) { WindowState = FormWindowState.Minimized; return; }
-                WindowState = (WindowState == FormWindowState.Maximized) ? FormWindowState.Normal : FormWindowState.Maximized;
+                if (idx == 0) { MinimizeAnimated(); return; }
+                ToggleMaximize();
             };
             head.Controls.Add(dots);
         }
@@ -1417,7 +1892,8 @@ namespace CursorStudioApp
             slider.SetBounds(18, 52, card.Width - 160, 38);
             slider.Minimum = 1;
             slider.Maximum = 15;
-            slider.OnChanged = delegate(int v) { UpdateSizeLabel(); SkinHandForLevel(v); };
+            slider.OnChanged = delegate(int v) { UpdateSizeLabel(); };
+            slider.OnDragEnd = delegate(int v) { SkinHandForLevel(v); };
             card.Controls.Add(slider);
 
             btnApplySize = new ModernButton("应用大小", true);
@@ -1497,7 +1973,9 @@ namespace CursorStudioApp
             UpdateSizeLabel();
             RefreshTiles(SelectedScheme(), true);
             AppCursors.Reset();
+            skinnedPx = -1;
             ApplyAppCursors();
+            StartWarmup();
             int packs = 0;
             foreach (Scheme s2 in schemes) if (s2.IsPack) packs++;
             SetStatus("已载入 " + schemes.Count + " 个方案（自定义 " + packs + " 个）。当前：" + (string.IsNullOrEmpty(current) ? "未知" : current));
@@ -1514,8 +1992,30 @@ namespace CursorStudioApp
         private void SkinHandForLevel(int level)
         {
             int px = 32 + (level - 1) * 8;
+            if (skinnedPx == px) return;      // 同一档位不重复重建、不重复遍历控件树
+            skinnedPx = px;
             Cursor = AppCursors.ArrowForPx(px) ?? Cursors.Default;
             SkinCursors(this, AppCursors.HandForPx(px) ?? Cursors.Hand);
+        }
+
+        private void StartWarmup()
+        {
+            warmIdx = 1;
+            if (warmTimer == null)
+            {
+                warmTimer = new Timer();
+                warmTimer.Interval = 50;
+                warmTimer.Tick += delegate
+                {
+                    if (slider == null || warmIdx > 15) { warmTimer.Stop(); return; }
+                    int px = 32 + (warmIdx - 1) * 8;
+                    AppCursors.ArrowForPx(px);
+                    AppCursors.HandForPx(px);
+                    warmIdx++;
+                };
+            }
+            warmTimer.Stop();
+            warmTimer.Start();
         }
 
         private static void SkinCursors(Control parent, Cursor c)
@@ -1532,6 +2032,15 @@ namespace CursorStudioApp
         {
             int px = 32 + (slider.Value - 1) * 8;
             lblSizeValue.Text = "档位 " + slider.Value + " · 约 " + px + " px";
+            UpdateActualLabel();
+        }
+
+        private void UpdateActualLabel()
+        {
+            int px = (slider != null ? slider.Value : 1);
+            px = 32 + (px - 1) * 8;
+            if (actualPx <= 0) lblActual.Text = "系统当前实际尺寸：读取失败（目标 " + px + " px）";
+            else lblActual.Text = "系统当前实际尺寸：" + actualPx + " px（目标 " + px + " px）";
         }
 
         private void RefreshTiles(Scheme preview, bool measure)
@@ -1561,10 +2070,8 @@ namespace CursorStudioApp
             flow.ResumeLayout();
 
             if (!measure) return;
-            int actual = MeasureActual();
-            int want = 32 + (slider.Value - 1) * 8;
-            if (actual <= 0) lblActual.Text = "系统当前实际尺寸：读取失败";
-            else lblActual.Text = "系统当前实际尺寸：" + actual + " px（目标 " + want + " px）";
+            actualPx = MeasureActual();
+            UpdateActualLabel();
         }
 
         private static string RolePathFor(Scheme s, int idx, string key)
@@ -1622,9 +2129,8 @@ namespace CursorStudioApp
             {
                 int applied = CursorWorks.ApplySize(slider.Value);
                 SkinHandForLevel(slider.Value);
-                int actual = MeasureActual();
+                actualPx = MeasureActual();
                 UpdateSizeLabel();
-                lblActual.Text = "系统当前实际尺寸：" + (actual <= 0 ? "读取失败" : actual + " px");
                 SetStatus("已按 " + slider.Value + " 档（约 " + (32 + (slider.Value - 1) * 8) + " px）重设 " + applied + " 个系统指针，立即生效。");
             }
             catch (Exception ex)
