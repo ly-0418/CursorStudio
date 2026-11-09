@@ -5,6 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 
 namespace CursorStudioApp
@@ -25,6 +26,10 @@ namespace CursorStudioApp
 
         internal static float K = 1f;
 
+        // 整体字号系数：所有字号都从这里过一遍，缩小界面上全部文字而保持原有层级比例。
+        // 只影响字体，不影响控件尺寸与间距（Px() 仍走 K）。
+        internal const float TextScale = 0.85f;
+
         internal static int Px(int v)
         {
             return (int)Math.Round(v * K);
@@ -32,7 +37,7 @@ namespace CursorStudioApp
 
         internal static Font F(float size, FontStyle style)
         {
-            return new Font("Microsoft YaHei UI", size * K, style);
+            return new Font("Microsoft YaHei UI", size * K * TextScale, style);
         }
 
         internal static GraphicsPath Round(Rectangle r, int radius)
@@ -108,7 +113,10 @@ namespace CursorStudioApp
         private static int Clamp(int px)
         {
             if (px < 24) px = 24;
-            if (px > 128) px = 128;
+            // 窗口内的手形/箭头封顶 40 逻辑像素：档位调很大时，
+            // 原尺寸的手形会把下拉列表整行盖住，反而不好点。
+            int max = (int)Math.Round(40 * Theme.K);
+            if (px > max) px = max;
             return px;
         }
 
@@ -304,7 +312,7 @@ namespace CursorStudioApp
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer
                 | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             Font = font;
-            itemH = Theme.Px(34);
+            itemH = Theme.Px(30);     // 字号整体缩小后按同比例收紧行高，文字不会显得悬在空行里
             BackColor = Color.White;
             Cursor = AppCursors.Hand() ?? Cursors.Hand;
             anim = new Timer();
@@ -967,7 +975,8 @@ namespace CursorStudioApp
 
     internal class TrafficDots : Control
     {
-        internal Action<int> OnDot;   // 0 = 黄（最小化）、1 = 绿（最大化/还原）、2 = 红（关闭）
+        internal Action<int> OnDot;    // 0 = 黄（最小化）、1 = 绿（最大化/还原）、2 = 红（关闭）
+        internal Action<int> OnHover;  // 悬停的圆点序号，-1 = 移出
         internal bool Maximized;
 
         private int hover = -1;
@@ -1027,6 +1036,12 @@ namespace CursorStudioApp
             if (idx == hover) return;
             hover = idx;
             if (anim != null) anim.Start();
+            if (OnHover != null) OnHover(idx);
+        }
+
+        internal Rectangle DotRect(int i)
+        {
+            return new Rectangle(DotX(i), DotY, dot, dot);
         }
 
         private void AnimTick(object sender, EventArgs e)
@@ -1156,6 +1171,50 @@ namespace CursorStudioApp
         }
     }
 
+    // 悬停提示：贴在圆点下方的小黑气泡
+    internal class TipBubble : Control
+    {
+        private string text = "";
+        private Font font;
+
+        internal TipBubble()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+                | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            font = Theme.F(8.5f, FontStyle.Regular);
+            Visible = false;
+        }
+
+        internal void ShowTip(string t, Point anchor, int limitRight)
+        {
+            text = t;
+            Size sz = TextRenderer.MeasureText(t, font);
+            int w = sz.Width + Theme.Px(20);
+            int h = sz.Height + Theme.Px(12);
+            int x = anchor.X - w / 2;
+            if (x + w > limitRight) x = limitRight - w;
+            if (x < Theme.Px(8)) x = Theme.Px(8);
+            Bounds = new Rectangle(x, anchor.Y, w, h);
+            if (!Visible) Visible = true;
+            BringToFront();
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath p = Theme.Round(r, Theme.Px(7)))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(240, 44, 50, 62)))
+                g.FillPath(b, p);
+            Rectangle tr = new Rectangle(Theme.Px(8), 0, Width - Theme.Px(16), Height);
+            TextRenderer.DrawText(g, text, font, tr, Color.FromArgb(246, 248, 252),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
+    }
+
     // 最小化动画用的快照层：整个界面被拍成一张图，随窗口一起缩小
     internal class SnapshotView : Control
     {
@@ -1189,6 +1248,581 @@ namespace CursorStudioApp
         }
     }
 
+    // 细进度条：圆角 + 渐变填充。下载进度本身更新很密，直接按真实值画就足够平滑，
+    // 不再做定时器追赶（那套在这里不稳定，反而会出现「有值但不填充」）。
+    internal class ThinProgress : Control
+    {
+        private float value;
+
+        internal ThinProgress()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+                | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Theme.Bg;
+            Visible = false;
+        }
+
+        internal float Value
+        {
+            get { return value; }
+            set
+            {
+                float v = value;
+                if (v < 0f) v = 0f;
+                if (v > 1f) v = 1f;
+                if (Math.Abs(v - this.value) < 0.0005f) return;
+                this.value = v;
+                Invalidate();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            int h = Height;
+            if (h < 2 || Width < 2) return;
+            Rectangle track = new Rectangle(0, 0, Width, h);
+            using (GraphicsPath p = Theme.Round(track, h / 2))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(214, 222, 234)))
+                g.FillPath(b, p);
+
+            int w = (int)Math.Round(Width * value);
+            if (w >= h)
+            {
+                Rectangle fill = new Rectangle(0, 0, w, h);
+                using (GraphicsPath p = Theme.Round(fill, h / 2))
+                using (LinearGradientBrush lb = new LinearGradientBrush(
+                           new Rectangle(0, 0, Math.Max(2, w), h),
+                           Theme.Primary, Color.FromArgb(104, 166, 248), LinearGradientMode.Horizontal))
+                    g.FillPath(lb, p);
+            }
+            else if (w > 0)
+            {
+                using (SolidBrush b = new SolidBrush(Theme.Primary))
+                    g.FillEllipse(b, 0, 0, h, h);
+            }
+        }
+    }
+
+    internal class OnlineSource
+    {
+        internal string Label;
+        internal string Repo;      // "owner/repo"；Custom 时为空
+        internal bool Custom;
+        internal bool Mirror;      // 走 ghproxy 镜像前缀
+    }
+
+    internal class OnlinePack
+    {
+        internal string Name;
+        internal string Url;
+        internal long Size;
+        internal string Display;
+    }
+
+    // 从链接安装：一个只有输入框的小弹窗
+    internal class UrlPromptForm : Form
+    {
+        private TextBox box;
+        internal string Url = "";
+
+        private static int T(int v) { return Theme.Px(v); }
+
+        internal UrlPromptForm()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Theme.Bg;
+            Font = Theme.F(9f, FontStyle.Regular);
+            DoubleBuffered = true;
+            KeyPreview = true;
+            ClientSize = new Size(T(560), T(196));
+
+            Label title = new Label();
+            title.Text = "从链接安装";
+            title.Font = Theme.F(10.5f, FontStyle.Bold);
+            title.ForeColor = Theme.TextMain;
+            title.BackColor = Theme.Bg;
+            title.SetBounds(T(24), T(20), T(320), T(24));
+            Controls.Add(title);
+
+            Label sub = new Label();
+            sub.Text = "粘贴一个 .zip 直链，工具会下载后自动解压到 custom\\ 目录";
+            sub.Font = Theme.F(8.5f, FontStyle.Regular);
+            sub.ForeColor = Theme.TextSub;
+            sub.BackColor = Theme.Bg;
+            sub.SetBounds(T(24), T(46), ClientSize.Width - T(48), T(20));
+            Controls.Add(sub);
+
+            box = new TextBox();
+            box.BorderStyle = BorderStyle.None;
+            box.Font = Theme.F(9.5f, FontStyle.Regular);
+            box.BackColor = Color.White;
+            box.ForeColor = Theme.TextMain;
+            box.SetBounds(T(36), T(82), ClientSize.Width - T(72), T(22));
+            Controls.Add(box);
+
+            ModernButton ok = new ModernButton("下载并安装", true);
+            ok.SetBounds(ClientSize.Width - T(24) - T(112), T(140), T(112), T(34));
+            ok.Click += delegate
+            {
+                string t = box.Text.Trim();
+                if (t.Length < 8 || !t.ToLowerInvariant().StartsWith("http"))
+                {
+                    box.Focus();
+                    return;
+                }
+                Url = t;
+                DialogResult = DialogResult.OK;
+                Close();
+            };
+            Controls.Add(ok);
+
+            ModernButton cancel = new ModernButton("取消", false);
+            cancel.SetBounds(ClientSize.Width - T(24) - T(112) - T(10) - T(80), T(140), T(80), T(34));
+            cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(cancel);
+
+            MouseDown += Drag;
+            title.MouseDown += Drag;
+            KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+        }
+
+        private void Drag(object o, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            Shell.ReleaseCapture();
+            Shell.SendMessage(Handle, Shell.WM_NCLBUTTONDOWN, (IntPtr)Shell.HTCAPTION, IntPtr.Zero);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath p = Theme.Round(r, T(12)))
+            using (Pen pen = new Pen(Theme.Border, 1f))
+                g.DrawPath(pen, p);
+
+            Rectangle f = new Rectangle(T(24), T(70), ClientSize.Width - T(48), T(44));
+            using (GraphicsPath p = Theme.Round(f, T(8)))
+            {
+                using (SolidBrush b = new SolidBrush(Color.White)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Theme.BorderFocus, 1f)) g.DrawPath(pen, p);
+            }
+        }
+    }
+
+    // 在线光标包：从 GitHub Release（或自定义直链）拉取，选中即下载安装
+    internal class OnlinePacksForm : Form
+    {
+        private List<OnlineSource> sources = new List<OnlineSource>();
+        private List<OnlinePack> packs = new List<OnlinePack>();
+        private ModernComboBox cmbSource;
+        private ModernButton btnReload;
+        private ModernButton btnInstall;
+        private SmoothList list;
+        private Label lblStatus;
+        private System.Net.WebClient wc;
+        private ThinProgress progress;
+        private bool busy;
+        private bool downloading;
+        private bool closing;
+        private bool mirror;
+
+        internal bool Installed;
+        internal string InstalledName = "";
+
+        private static int T(int v) { return Theme.Px(v); }
+
+        internal OnlinePacksForm()
+        {
+            Text = "在线获取光标包";
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Theme.Bg;
+            Font = Theme.F(9f, FontStyle.Regular);
+            DoubleBuffered = true;
+            KeyPreview = true;
+            ClientSize = new Size(T(640), T(486));
+
+            sources.Add(NewSource("GitHub · Bibata（ful1e5）", "ful1e5/Bibata_Cursor", false, false));
+            sources.Add(NewSource("GitHub · BreezeX（ful1e5）", "ful1e5/BreezeX_Cursor", false, false));
+            sources.Add(NewSource("Bibata（镜像加速）", "ful1e5/Bibata_Cursor", false, true));
+            sources.Add(NewSource("BreezeX（镜像加速）", "ful1e5/BreezeX_Cursor", false, true));
+            sources.Add(NewSource("自定义链接…", "", true, false));
+
+            Label title = new Label();
+            title.Text = "在线获取光标包";
+            title.Font = Theme.F(11f, FontStyle.Bold);
+            title.ForeColor = Theme.TextMain;
+            title.BackColor = Theme.Bg;
+            title.SetBounds(T(24), T(18), T(400), T(26));
+            Controls.Add(title);
+
+            Label sub = new Label();
+            sub.Text = "来自官方 GitHub Release 的 Windows 包，选中后安装到 custom\\ 目录";
+            sub.Font = Theme.F(8.5f, FontStyle.Regular);
+            sub.ForeColor = Theme.TextSub;
+            sub.BackColor = Theme.Bg;
+            sub.SetBounds(T(24), T(44), ClientSize.Width - T(40), T(20));
+            Controls.Add(sub);
+
+            Label lbSrc = new Label();
+            lbSrc.Text = "来源";
+            lbSrc.Font = Theme.F(9f, FontStyle.Regular);
+            lbSrc.ForeColor = Theme.TextSub;
+            lbSrc.BackColor = Theme.Bg;
+            lbSrc.TextAlign = ContentAlignment.MiddleLeft;
+            lbSrc.SetBounds(T(24), T(78), T(40), T(36));
+            Controls.Add(lbSrc);
+
+            cmbSource = new ModernComboBox();
+            cmbSource.SetBounds(T(68), T(78), T(300), T(36));
+            List<string> names = new List<string>();
+            foreach (OnlineSource os in sources) names.Add(os.Label);
+            cmbSource.SetItems(names, 0);
+            cmbSource.OnChanged = delegate(int idx) { if (!busy) PickSource(idx); };
+            Controls.Add(cmbSource);
+
+            btnReload = new ModernButton("刷新", false);
+            btnReload.SetBounds(T(378), T(78), T(80), T(36));
+            btnReload.Click += delegate { if (!busy) PickSource(cmbSource.SelectedIndex); };
+            Controls.Add(btnReload);
+
+            CardPanel card = new CardPanel();
+            card.SetBounds(T(24), T(128), ClientSize.Width - T(48), T(250));
+            Controls.Add(card);
+
+            list = new SmoothList(Font);
+            list.SetBounds(T(10), T(10), card.Width - T(20), card.Height - T(20));
+            list.OnPick = delegate(int idx) { ShowPackHint(idx); };
+            card.Controls.Add(list);
+
+            progress = new ThinProgress();
+            progress.SetBounds(T(24), T(383), ClientSize.Width - T(48), T(8));
+            Controls.Add(progress);
+
+            lblStatus = new Label();
+            lblStatus.Text = "";
+            lblStatus.Font = Theme.F(8.5f, FontStyle.Regular);
+            lblStatus.ForeColor = Theme.TextSub;
+            lblStatus.BackColor = Theme.Bg;
+            lblStatus.SetBounds(T(26), T(398), ClientSize.Width - T(52), T(20));
+            Controls.Add(lblStatus);
+
+            btnInstall = new ModernButton("下载并安装", true);
+            btnInstall.SetBounds(ClientSize.Width - T(24) - T(68) - T(10) - T(124), T(430), T(124), T(34));
+            btnInstall.Click += delegate { OnPrimary(); };
+            Controls.Add(btnInstall);
+
+            ModernButton btnClose = new ModernButton("关闭", false);
+            btnClose.SetBounds(ClientSize.Width - T(24) - T(68), T(430), T(68), T(34));
+            btnClose.Click += delegate { Close(); };
+            Controls.Add(btnClose);
+
+            MouseDown += Drag;
+            title.MouseDown += Drag;
+            sub.MouseDown += Drag;
+            KeyDown += delegate(object o, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Close(); };
+
+            PickSource(0);
+        }
+
+        private static OnlineSource NewSource(string label, string repo, bool custom, bool mirror)
+        {
+            OnlineSource s = new OnlineSource();
+            s.Label = label;
+            s.Repo = repo;
+            s.Custom = custom;
+            s.Mirror = mirror;
+            return s;
+        }
+
+        private void Drag(object o, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            Shell.ReleaseCapture();
+            Shell.SendMessage(Handle, Shell.WM_NCLBUTTONDOWN, (IntPtr)Shell.HTCAPTION, IntPtr.Zero);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath p = Theme.Round(r, T(12)))
+            using (Pen pen = new Pen(Theme.Border, 1f))
+                e.Graphics.DrawPath(pen, p);
+        }
+
+        private void SetStatus(string t)
+        {
+            lblStatus.Text = t;
+        }
+
+        private void ShowPackHint(int idx)
+        {
+            if (idx < 0 || idx >= packs.Count) return;
+            SetStatus(packs[idx].Name + " · " + MB(packs[idx].Size) + " · 点「下载并安装」");
+        }
+
+        private static string MB(long b)
+        {
+            if (b <= 0) return "未知大小";
+            return (b / 1048576.0).ToString("0.0") + " MB";
+        }
+
+        private void Cancel()
+        {
+            try { if (wc != null) wc.CancelAsync(); } catch { }
+            if (wc != null) { try { wc.Dispose(); } catch { } wc = null; }
+            busy = false;
+        }
+
+        private void PickSource(int idx)
+        {
+            if (idx < 0 || idx >= sources.Count) return;
+            if (sources[idx].Custom)
+            {
+                AskUrl();
+                return;
+            }
+            FetchRelease(sources[idx]);
+        }
+
+        private void AskUrl()
+        {
+            using (UrlPromptForm f = new UrlPromptForm())
+            {
+                if (f.ShowDialog(this) != DialogResult.OK)
+                {
+                    cmbSource.SelectedIndex = 0;
+                    return;
+                }
+                string url = f.Url;
+                string name = url;
+                int q = name.IndexOf('?');
+                if (q > 0) name = name.Substring(0, q);
+                int slash = name.LastIndexOf('/');
+                if (slash >= 0) name = name.Substring(slash + 1);
+
+                packs.Clear();
+                list.Items.Clear();
+                OnlinePack p = new OnlinePack();
+                p.Name = name;
+                p.Url = url;
+                p.Size = 0;
+                p.Display = name + "    ·  自定义链接";
+                packs.Add(p);
+                list.Items.Add(p.Display);
+                list.SelectedIndex = 0;
+                list.Invalidate();
+                SetStatus("已载入自定义链接，点「下载并安装」开始");
+            }
+        }
+
+        private void FetchRelease(OnlineSource src)
+        {
+            Cancel();
+            mirror = src.Mirror;
+            packs.Clear();
+            list.Items.Clear();
+            list.SelectedIndex = -1;
+            list.Invalidate();
+            SetStatus("正在读取 " + src.Label + " 的最新 Release…");
+            busy = true;
+
+            wc = new System.Net.WebClient();
+            wc.Headers.Add("User-Agent", "CursorStudio-PackBrowser");
+            wc.Encoding = Encoding.UTF8;
+            wc.DownloadStringCompleted += delegate(object o, System.Net.DownloadStringCompletedEventArgs e)
+            {
+                if (closing || IsDisposed) return;
+                busy = false;
+                if (e.Error != null) { SetStatus("读取失败：" + Short(e.Error.Message)); return; }
+                try { ParseRelease(e.Result); }
+                catch (Exception ex) { SetStatus("解析失败：" + Short(ex.Message)); }
+            };
+            try
+            {
+                wc.DownloadStringAsync(new Uri("https://api.github.com/repos/" + src.Repo + "/releases/latest"));
+            }
+            catch (Exception ex)
+            {
+                busy = false;
+                SetStatus("读取失败：" + Short(ex.Message));
+            }
+        }
+
+        private void ParseRelease(string json)
+        {
+            System.Web.Script.Serialization.JavaScriptSerializer js =
+                new System.Web.Script.Serialization.JavaScriptSerializer();
+            js.MaxJsonLength = 16 * 1024 * 1024;
+            Dictionary<string, object> root = js.DeserializeObject(json) as Dictionary<string, object>;
+            if (root == null) { SetStatus("返回内容不是预期的 JSON。"); return; }
+            object[] assets = null;
+            if (root.ContainsKey("assets")) assets = root["assets"] as object[];
+            if (assets == null) { SetStatus("这个仓库没有 Release 资源。"); return; }
+
+            string tag = root.ContainsKey("tag_name") ? Convert.ToString(root["tag_name"]) : "";
+
+            foreach (object o in assets)
+            {
+                Dictionary<string, object> a = o as Dictionary<string, object>;
+                if (a == null) continue;
+                string name = a.ContainsKey("name") ? Convert.ToString(a["name"]) : "";
+                string url = a.ContainsKey("browser_download_url") ? Convert.ToString(a["browser_download_url"]) : "";
+                if (name.Length == 0 || url.Length == 0) continue;
+                if (!name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+                if (name.IndexOf("windows", StringComparison.OrdinalIgnoreCase) < 0) continue;   // 只要 Windows 包
+
+                long size = 0;
+                if (a.ContainsKey("size")) { try { size = Convert.ToInt64(a["size"]); } catch { } }
+
+                if (mirror) url = "https://ghproxy.net/" + url;   // 国内直连 GitHub 往往只有几十 KB/s
+
+                OnlinePack p = new OnlinePack();
+                p.Name = name;
+                p.Url = url;
+                p.Size = size;
+                p.Display = name.Substring(0, name.Length - 4) + "    ·  " + MB(size);
+                packs.Add(p);
+                list.Items.Add(p.Display);
+            }
+            list.Invalidate();
+
+            if (packs.Count == 0) SetStatus("没找到 Windows 的 zip 资源（" + tag + "）。");
+            else SetStatus("共 " + packs.Count + " 个包" + (tag.Length > 0 ? "（" + tag + "）" : "") + "，选中一个再点「下载并安装」");
+        }
+
+        private void OnPrimary()
+        {
+            if (downloading) { CancelDownload(); return; }
+            StartInstall();
+        }
+
+        private void CancelDownload()
+        {
+            if (wc == null) return;
+            SetStatus("正在取消下载…");
+            try { wc.CancelAsync(); } catch { }
+        }
+
+        private void ResetDownloadUi()
+        {
+            busy = false;
+            downloading = false;
+            if (btnInstall != null)
+            {
+                btnInstall.Text = "下载并安装";
+                btnInstall.Invalidate();
+            }
+            if (progress != null)
+            {
+                progress.Value = 0;
+                progress.Visible = false;
+            }
+        }
+
+        private void StartInstall()
+        {
+            if (busy) return;
+            int idx = list.SelectedIndex;
+            if (idx < 0 || idx >= packs.Count)
+            {
+                SetStatus("先在上面的列表里选一个包。");
+                return;
+            }
+            OnlinePack p = packs[idx];
+            string tmp = Path.Combine(Path.GetTempPath(), "cs_dl_" + Guid.NewGuid().ToString("N") + ".zip");
+            busy = true;
+            downloading = true;
+            btnInstall.Text = "取消下载";
+            btnInstall.Invalidate();
+            progress.Value = 0;
+            progress.Visible = true;
+            SetStatus("正在下载 " + p.Name + " …");
+
+            wc = new System.Net.WebClient();
+            wc.Headers.Add("User-Agent", "CursorStudio-PackBrowser");
+            wc.DownloadProgressChanged += delegate(object o, System.Net.DownloadProgressChangedEventArgs e)
+            {
+                if (closing || IsDisposed) return;
+                long total = e.TotalBytesToReceive;
+                if (total > 0)
+                {
+                    progress.Value = (float)((double)e.BytesReceived / total);
+                    SetStatus("正在下载 " + p.Name + " · " + e.ProgressPercentage + "%（" +
+                        MB(e.BytesReceived) + " / " + MB(total) + "）");
+                }
+                else
+                {
+                    SetStatus("正在下载 " + p.Name + " · 已下载 " + MB(e.BytesReceived));
+                }
+            };
+            wc.DownloadFileCompleted += delegate(object o, System.ComponentModel.AsyncCompletedEventArgs e)
+            {
+                if (closing || IsDisposed) return;
+                bool cancelled = e.Cancelled;
+                ResetDownloadUi();
+                if (cancelled)
+                {
+                    try { File.Delete(tmp); } catch { }
+                    SetStatus("已取消下载，临时文件已删除。");
+                    return;
+                }
+                if (e.Error != null)
+                {
+                    try { File.Delete(tmp); } catch { }
+                    SetStatus("下载失败：" + Short(e.Error.Message));
+                    return;
+                }
+                try
+                {
+                    int matched;
+                    string name = CursorWorks.InstallZip(tmp, out matched);
+                    InstalledName = name;
+                    Installed = true;
+                    SetStatus("已安装「" + name + "」，匹配 " + matched + " 个角色，回到主界面就能选它。");
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("安装失败：" + Short(ex.Message));
+                }
+                finally
+                {
+                    try { File.Delete(tmp); } catch { }
+                }
+            };
+            try
+            {
+                wc.DownloadFileAsync(new Uri(p.Url), tmp);
+            }
+            catch (Exception ex)
+            {
+                ResetDownloadUi();
+                SetStatus("下载失败：" + Short(ex.Message));
+            }
+        }
+
+        private static string Short(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "未知错误";
+            return s.Length > 90 ? s.Substring(0, 90) + "…" : s;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            closing = true;
+            if (disposing) Cancel();
+            base.Dispose(disposing);
+        }
+    }
+
     public class MainForm : Form
     {
         [DllImport("user32.dll")]
@@ -1210,6 +1844,9 @@ namespace CursorStudioApp
         private Panel head;
         private Label lblHint;
         private TrafficDots dots;
+        private TipBubble tip;
+        private Timer tipTimer;
+        private int tipIdx = -1;
         private CardPanel cardScheme;
         private CardPanel cardSize;
         private CardPanel cardPreview;
@@ -1322,6 +1959,7 @@ namespace CursorStudioApp
         private void LayoutAll()
         {
             if (skipLayout) return;            // 最小化动画期间只画快照，不重排
+            HideTip();
             int w = ClientSize.Width;
             int h = ClientSize.Height;
             if (w < 200 || h < 200) return;
@@ -1792,11 +2430,48 @@ namespace CursorStudioApp
             dots.Location = new Point(ClientSize.Width - 160, 20);
             dots.OnDot = delegate(int idx)
             {
+                HideTip();
                 if (idx == 2) { Close(); return; }
                 if (idx == 0) { MinimizeAnimated(); return; }
                 ToggleMaximize();
             };
+            dots.OnHover = delegate(int idx) { TipHover(idx); };
             head.Controls.Add(dots);
+
+            tip = new TipBubble();
+            Controls.Add(tip);
+            tip.BringToFront();
+            tipTimer = new Timer();
+            tipTimer.Interval = 260;
+            tipTimer.Tick += delegate { ShowTipForDot(); };
+        }
+
+        private void TipHover(int idx)
+        {
+            if (tipTimer == null) return;
+            tipTimer.Stop();
+            HideTip();
+            tipIdx = idx;
+            if (idx < 0) return;
+            tipTimer.Start();
+        }
+
+        private void HideTip()
+        {
+            if (tip != null && tip.Visible) tip.Visible = false;
+        }
+
+        private void ShowTipForDot()
+        {
+            if (tipTimer != null) tipTimer.Stop();
+            if (tipIdx < 0 || tip == null || dots == null) return;
+            string text;
+            if (tipIdx == 0) text = "最小化到任务栏";
+            else if (tipIdx == 1) text = maximized ? "还原窗口" : "铺满屏幕";
+            else text = "关闭窗口";
+            Rectangle r = dots.DotRect(tipIdx);
+            Point anchor = new Point(dots.Left + r.X + r.Width / 2, dots.Top + dots.Height + Theme.Px(2));
+            tip.ShowTip(text, anchor, ClientSize.Width - Theme.Px(8));
         }
 
         private Label CardTitle(CardPanel card, string text)
@@ -1841,9 +2516,9 @@ namespace CursorStudioApp
             btnRefresh.Click += delegate { LoadAll(); };
             card.Controls.Add(btnRefresh);
 
-            btnImport = new ModernButton("导入光标包", false);
+            btnImport = new ModernButton("在线获取光标包", false);
             btnImport.SetBounds(18, 98, 124, 32);
-            btnImport.Click += delegate { Import(); };
+            btnImport.Click += delegate { OpenOnlinePacks(); };
             card.Controls.Add(btnImport);
 
             btnRestore = new ModernButton("恢复系统默认", false);
@@ -2139,25 +2814,28 @@ namespace CursorStudioApp
             }
         }
 
-        private void Import()
+        private void OpenOnlinePacks()
         {
-            using (FolderBrowserDialog dlg = new FolderBrowserDialog())
+            using (OnlinePacksForm f = new OnlinePacksForm())
             {
-                dlg.Description = "选择光标包文件夹（里面应包含 .cur / .ani 文件）";
-                dlg.ShowNewFolderButton = false;
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                try
-                {
-                    int matched;
-                    int total;
-                    string name = CursorWorks.ImportPack(dlg.SelectedPath, out matched, out total);
-                    LoadAll();
-                    SetStatus("已导入「" + name + "」到自定义目录：识别 " + matched + " / " + total + " 种指针，已加入方案列表。");
-                }
-                catch (Exception ex)
-                {
-                    SetStatus("导入失败：" + ex.Message);
-                }
+                f.ShowDialog(this);
+                if (!f.Installed) return;
+                LoadAll();
+                SelectSchemeByName(f.InstalledName);
+                SetStatus("已在线安装「" + f.InstalledName + "」，已加入方案列表并选中。");
+            }
+        }
+
+        private void SelectSchemeByName(string name)
+        {
+            if (string.IsNullOrEmpty(name) || schemes == null) return;
+            for (int i = 0; i < schemes.Count; i++)
+            {
+                if (!string.Equals(schemes[i].Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+                if (cmb.SelectedIndex == i) return;
+                cmb.SelectedIndex = i;
+                RefreshTiles(schemes[i], true);
+                return;
             }
         }
 
@@ -2191,6 +2869,13 @@ namespace CursorStudioApp
         [STAThread]
         private static void Main(string[] args)
         {
+            try
+            {
+                // GitHub 只走 TLS 1.2+，.NET 4.x 默认可能还是 SSL3/TLS1.0
+                System.Net.ServicePointManager.SecurityProtocol =
+                    (System.Net.SecurityProtocolType)3072 | (System.Net.SecurityProtocolType)768;
+            }
+            catch { }
             if (args != null && args.Length >= 2 && string.Equals(args[0], "--import", StringComparison.OrdinalIgnoreCase))
             {
                 string log = Path.Combine(Path.GetTempPath(), "CursorStudio-import.log");
