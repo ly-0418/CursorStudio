@@ -53,12 +53,16 @@ namespace CursorStudioApp
     internal static class AppCursors
     {
         private static Cursor hand;
-        private static int cachedPx = -1;
+        private static int handPx = -1;
+        private static Cursor arrow;
+        private static int arrowPx = -1;
 
         internal static void Reset()
         {
-            cachedPx = -1;
+            handPx = -1;
+            arrowPx = -1;
             hand = null;
+            arrow = null;
         }
 
         internal static Cursor Hand()
@@ -67,22 +71,48 @@ namespace CursorStudioApp
             return HandForPx(32 + (CursorWorks.CurrentSize() - 1) * 8);
         }
 
+        internal static Cursor Arrow()
+        {
+            if (arrow != null) return arrow;
+            return ArrowForPx(32 + (CursorWorks.CurrentSize() - 1) * 8);
+        }
+
         internal static Cursor HandForPx(int px)
+        {
+            px = Clamp(px);
+            if (hand != null && handPx == px) return hand;
+            handPx = px;
+            hand = Build("Hand", px);
+            return hand;
+        }
+
+        internal static Cursor ArrowForPx(int px)
+        {
+            px = Clamp(px);
+            if (arrow != null && arrowPx == px) return arrow;
+            arrowPx = px;
+            arrow = Build("Arrow", px);
+            return arrow;
+        }
+
+        private static int Clamp(int px)
         {
             if (px < 24) px = 24;
             if (px > 128) px = 128;
-            if (hand != null && cachedPx == px) return hand;
-            cachedPx = px;
-            hand = null;
+            return px;
+        }
+
+        private static Cursor Build(string role, int px)
+        {
             try
             {
-                string p = CursorWorks.GetRolePath("Hand");
+                string p = CursorWorks.GetRolePath(role);
                 if (string.IsNullOrEmpty(p) || !File.Exists(p)) return null;
                 IntPtr h = CursorWorks.BuildHdCursor(p, px);
-                if (h != IntPtr.Zero) hand = new Cursor(h);
+                if (h != IntPtr.Zero) return new Cursor(h);
             }
             catch { }
-            return hand;
+            return null;
         }
     }
 
@@ -203,6 +233,7 @@ namespace CursorStudioApp
         {
             if (items.Count == 0) return;
             DropDownList dlg = new DropDownList(items, selected, Width, Font);
+            dlg.Cursor = AppCursors.Arrow() ?? Cursors.Default;
             Point p = PointToScreen(new Point(0, Height + 2));
             dlg.Location = p;
             dlg.OnPick = delegate(int idx)
@@ -1161,14 +1192,16 @@ namespace CursorStudioApp
         private void ApplyAppCursors()
         {
             Cursor hc = AppCursors.Hand() ?? Cursors.Hand;
+            Cursor ac = AppCursors.Arrow() ?? Cursors.Default;
+            Cursor = ac;
             SkinCursors(this, hc);
         }
 
         private void SkinHandForLevel(int level)
         {
             int px = 32 + (level - 1) * 8;
-            Cursor hc = AppCursors.HandForPx(px) ?? Cursors.Hand;
-            SkinCursors(this, hc);
+            Cursor = AppCursors.ArrowForPx(px) ?? Cursors.Default;
+            SkinCursors(this, AppCursors.HandForPx(px) ?? Cursors.Hand);
         }
 
         private static void SkinCursors(Control parent, Cursor c)
@@ -1238,18 +1271,15 @@ namespace CursorStudioApp
 
         private int MeasureActual()
         {
-            Point old = Cursor.Position;
+            // 不移动指针：按钮上的手形本身就是按当前档位重建的，尺寸与系统箭头一致，
+            // 原地直接读 GetCursorInfo 即可，避免指针在屏幕上跳来跳去。
             int px = 0;
-            try
+            for (int i = 0; i < 5; i++)
             {
-                Cursor.Position = PointToScreen(new Point(ClientSize.Width / 2, ClientSize.Height - 46));
-                Application.DoEvents();
-                System.Threading.Thread.Sleep(220);
                 px = CursorWorks.GetCursorPixels();
-            }
-            finally
-            {
-                Cursor.Position = old;
+                if (px > 0) break;
+                Application.DoEvents();
+                System.Threading.Thread.Sleep(20);
             }
             return px;
         }
@@ -1277,8 +1307,7 @@ namespace CursorStudioApp
             try
             {
                 int applied = CursorWorks.ApplySize(slider.Value);
-                AppCursors.Reset();
-                ApplyAppCursors();
+                SkinHandForLevel(slider.Value);
                 int actual = MeasureActual();
                 UpdateSizeLabel();
                 lblActual.Text = "系统当前实际尺寸：" + (actual <= 0 ? "读取失败" : actual + " px");
