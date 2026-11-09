@@ -43,13 +43,18 @@ CursorStudio 就是把这套流程做成图形界面的工具：换方案、调�
 
 > 应用完大小后，如果又去拖动 Windows 设置里的自带滑块，系统会重载方案把指针打回 32 px —— 回到本工具再点一次「应用大小」即可。
 
+> `docs/使用说明.txt` 是随程序分发的完整中文说明，里面的 `D:\CursorStudio\` 是作者的本地安装示例路径，按你自己解压的目录理解即可。
+
 ## 自定义光标包
 
 把任意光标包**整个文件夹**丢进 `custom/`，点「刷新列表」（或重启程序）就会自动出现在下拉框里，文件夹名就是方案名（`Bibata-Modern-Classic` → 「Bibata Modern Classic（自定义）」）。
 
 - 一个子文件夹 = 一个方案，支持递归查找，`.cur` / `.ani` 都认。
 - 也可以点「导入光标包」直接选位于别处的包，工具会复制进来并立即识别。
-- 自带 5 个热门包（Bibata × 3、BreezeX × 2）的**下载地址**见 [docs/使用说明.txt](docs/使用说明.txt)；这些第三方素材遵循各自许可证，本仓库不直接分发。
+- 推荐两个热门系列（均遵循 GPL-3.0，请从作者官方 Release 下载，本仓库不直接分发这些素材）：
+  - [Bibata Cursor](https://github.com/ful1e5/Bibata_Cursor/releases) —— 尖角星形设计，黑 / 冰蓝 / 琥珀三种描边
+  - [BreezeX Cursor](https://github.com/ful1e5/BreezeX_Cursor/releases) —— KDE Breeze 风格，黑 / 浅灰
+  解压后把里面的文件夹整个复制到 `custom/` 即可。
 
 ### 21 个角色的识别规则
 
