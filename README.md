@@ -8,7 +8,7 @@
 <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6">
 <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 <img alt="runtime" src="https://img.shields.io/badge/.NET%20Framework-4.x-blueviolet">
-<img alt="size" src="https://img.shields.io/badge/exe-472%20KB-lightgrey">
+<img alt="size" src="https://img.shields.io/badge/exe-488%20KB-lightgrey">
 </p>
 
 ---
@@ -26,12 +26,13 @@ CursorStudio 就是把这套流程做成图形界面的工具：换方案、调�
 | 功能 | 说明 |
 |---|---|
 | **方案切换** | 列出系统内置方案 + `custom/` 下的第三方包，选中即预览、点「应用此方案」才真正替换 |
+| **在线获取光标包** | 内置 Bibata / BreezeX 的 GitHub Release 列表（含 ghproxy 镜像加速）与「自定义直链」；选中即下载、解压到 `custom/`、登记成方案并自动选中 |
 | **大小调节** | 1–15 档，`px = 32 + (档位-1) × 8`（32 / 40 / 48 … 144 px），档位实时预览；滑条为细轨道 + 蓝色渐变进度 + 带投影的圆形滑块，悬停/拖动时滑块放大并透出光晕 |
 | **形态预览** | 21 种指针形态，直接解析 `.cur`/`.ani` 内部**最大原始帧**（通常 128×128）重采样，不是把 32px 小图拉大 |
 | **界面小手跟随** | 按钮、下拉框、滑块上的手形光标取自当前方案自己的 `Hand.cur`，尺寸跟着档位实时变 |
 | **指针不跳** | 启动、切方案、应用大小全程不移动指针；窗口里卡片与按钮用同一档位的箭头/小手，进出按钮不会有 32↔40 的尺寸跳变 |
 | **窗口自由缩放** | 无边框界面自己造缩放：四边 + 四角都能拖，卡片、按钮、下拉框、滑块与预览网格随窗口实时重排，最小 660×720 |
-| **macOS 红绿灯** | 右上角三色圆点：黄＝最小化、绿＝最大化/还原、红＝关闭（红在最右）；悬停图标是矢量笔画手绘、按圆点比例居中：＋ / － / 双框 / ✕ |
+| **macOS 红绿灯** | 右上角三色圆点：黄＝最小化、绿＝最大化/还原、红＝关闭（红在最右）；悬停图标是矢量笔画手绘、按圆点比例居中：＋ / － / 双框 / ✕，并浮出「最小化到任务栏 / 铺满屏幕 / 关闭窗口」的提示气泡 |
 | **窗口动画** | 最大化/还原由自驱帧循环 + smoothstep 驱动（0.2–0.28 s 自适应，帧间隔均匀、无位移帧不重绘），中途再点立刻反向；黄点最小化有「收进任务栏」的缩图动画 |
 | **拖边缩放** | 鼠标只记录位置、按帧推进重排，不再每个鼠标消息排一次版，窗口紧跟指针不积压 |
 | **全自绘界面** | 圆角卡片 + 自绘按钮/滑块/下拉，下拉是像素级平滑滚动，不是系统 ListBox 的一格一格跳 |
@@ -41,7 +42,7 @@ CursorStudio 就是把这套流程做成图形界面的工具：换方案、调�
 
 ## 下载与使用
 
-1. 到 [Releases](https://github.com/ly-0418/CursorStudio/releases) 下载 `CursorStudio-1.0.3-portable.zip`，**解压到任意目录**（不要直接在压缩包里双击运行）。
+1. 到 [Releases](https://github.com/ly-0418/CursorStudio/releases) 下载 `CursorStudio-1.0.4-portable.zip`，**解压到任意目录**（不要直接在压缩包里双击运行）。
 2. 双击 `CursorStudio.exe`。
 3. 下拉框里选一个方案 → 预览区立刻换成它的 21 种形态 → 满意就点 **「应用此方案」**。
 4. 拖大小滑块选档位 → 点 **「应用大小」**。界面上的「系统当前实际尺寸」是实测值，和档位对得上才说明真的生效。
@@ -55,7 +56,7 @@ CursorStudio 就是把这套流程做成图形界面的工具：换方案、调�
 把任意光标包**整个文件夹**丢进 `custom/`，点「刷新列表」（或重启程序）就会自动出现在下拉框里，文件夹名就是方案名（`Bibata-Modern-Classic` → 「Bibata Modern Classic（自定义）」）。
 
 - 一个子文件夹 = 一个方案，支持递归查找，`.cur` / `.ani` 都认。
-- 也可以点「导入光标包」直接选位于别处的包，工具会复制进来并立即识别。
+- 不想手动翻 GitHub：点「**在线获取光标包**」，来源下拉里可选 Bibata / BreezeX 的官方 Release（含 ghproxy 镜像加速），也可以粘贴任意 `.zip` 直链；选中包点「下载并安装」，工具会自动下载、解压到 `custom/`、登记成方案并回主界面选中它。下载过程中有进度条，右下角按钮会变成「取消下载」，随时可中止。
 - 推荐两个热门系列（均遵循 GPL-3.0，请从作者官方 Release 下载，本仓库不直接分发这些素材）：
   - [Bibata Cursor](https://github.com/ful1e5/Bibata_Cursor/releases) —— 尖角星形设计，黑 / 冰蓝 / 琥珀三种描边
   - [BreezeX Cursor](https://github.com/ful1e5/BreezeX_Cursor/releases) —— KDE Breeze 风格，黑 / 浅灰
@@ -143,7 +144,7 @@ csc /nologo /codepage:65001 /target:winexe /platform:anycpu ^
 不调用任何系统截图 API（它们只返回 32×32），而是自己按 `.cur`/`.ani` 的结构解析：`ICONDIR` → 每帧的 `BITMAPINFOHEADER` → 32bpp DIB 像素（含 XOR/AND 掩码还原），再 `ScaleCursor` 到显示尺寸。这样 46px 的格子画的是 128px 的原图，边缘干净。
 
 **5. 界面为什么清晰**
-`CursorStudio.manifest` 里声明 `dpiAware=true / dpiAwareness=system`，程序启动按 `GetDpiForSystem()` 得到缩放系数 `K`，所有字号用 `Theme.F(size*K)`、所有尺寸用 `Theme.Px(v*K)`，并手写 `ScaleTree()` 递归缩放控件树。
+`CursorStudio.manifest` 里声明 `dpiAware=true / dpiAwareness=system`，程序启动按 `GetDpiForSystem()` 得到缩放系数 `K`，所有字号用 `Theme.F(size*K*TextScale)`、所有尺寸用 `Theme.Px(v*K)`，并手写 `ScaleTree()` 递归缩放控件树。其中 `TextScale = 0.85` 是整体字号系数——改这一个常量就能等比放大/缩小界面上全部文字（标题、正文、说明、按钮），层级关系不变。
 （WinForms 自带的 `AutoScaleMode.Dpi + PerformAutoScale()` 在这个全自绘场景里实测完全无效，客户区不变、子控件不变，只能手写。）
 
 **6. 界面里的小手**
@@ -184,6 +185,15 @@ csc /nologo /codepage:65001 /target:winexe /platform:anycpu ^
 </details>
 
 ## 更新记录
+
+### v1.0.4 · 2026-11-09
+
+- **在线获取光标包**：不用再自己去 GitHub 翻 Release。新按钮打开一个包浏览器，来源可选 Bibata / BreezeX 的官方 Release、对应的 ghproxy 镜像加速（实测直连 GitHub 只有约 45 KB/s，11 MB 的包要下好几分钟），或粘贴任意 `.zip` 直链。列表显示包名与体积，选中后点「下载并安装」，工具会自动下载、解压到 `custom/`、登记成方案，并在回到主界面时直接选中它。
+- **下载进度与取消**：下载时列表下方出现细进度条，状态行给出「百分比（已下载 / 总大小）」；右下角主按钮同时变成「取消下载」，随时可以中止，已下载的半截临时文件会自动删掉。
+- **红绿灯悬停提示**：鼠标在圆点上停留约 0.26 秒，下方浮出一个深色气泡 ——「最小化到任务栏」/「铺满屏幕」（已最大化时是「还原窗口」）/「关闭窗口」。移开或点击即收，窗口尺寸变化时也会收起。
+- **修掉下拉列表里过大的小手**：窗口内的手形与箭头光标统一封顶 40 逻辑像素（按 DPI 换算）。之前窗口光标直接跟着系统指针档位走，档位调到 72 px 时，一只 72 px 的大手能把 34 px 高的下拉行整个盖住；桌面上的系统光标不受这个上限影响。
+- **整体字号缩小**：新增 `Theme.TextScale` 统一系数（当前 `0.85`），主标题、卡片标题、正文、说明文字、按钮全部等比缩小 15%，各层级的大小关系保持不变；下拉列表行高同步收紧，避免文字悬在空行里。
+- 便携包重新打包，`docs/使用说明.txt` 同步上述改动。
 
 ### v1.0.3 · 2026-11-09
 
