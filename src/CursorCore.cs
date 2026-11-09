@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -776,6 +777,67 @@ namespace CursorStudioApp
             s.Paths = finalPaths;
             RegisterScheme(s);
             return name;
+        }
+
+        // 从 zip 安装光标包：解压到临时目录 → 找 .cur/.ani 最多的目录 → 复制进 custom/<名字> → 登记方案
+        internal static string InstallZip(string zipPath, out int matched)
+        {
+            matched = 0;
+            string tmp = Path.Combine(Path.GetTempPath(), "cs_pack_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmp);
+            try
+            {
+                string tmpFull = Path.GetFullPath(tmp).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                using (System.IO.Compression.ZipArchive za = System.IO.Compression.ZipFile.OpenRead(zipPath))
+                {
+                    foreach (System.IO.Compression.ZipArchiveEntry e in za.Entries)
+                    {
+                        if (string.IsNullOrEmpty(e.Name)) continue;                 // 目录条目
+                        string target = Path.GetFullPath(Path.Combine(tmp, e.FullName.Replace('/', Path.DirectorySeparatorChar)));
+                        if (!target.StartsWith(tmpFull, StringComparison.OrdinalIgnoreCase)) continue;   // 防目录穿越
+                        Directory.CreateDirectory(Path.GetDirectoryName(target));
+                        e.ExtractToFile(target, true);
+                    }
+                }
+
+                string best = FindCursorDir(tmp);
+                if (best == null) throw new InvalidOperationException("压缩包里没有 .cur / .ani 文件");
+
+                string name = PackName(best);
+                string root = CustomDir();
+                string dest = Path.Combine(root, name);
+                int n = 2;
+                while (Directory.Exists(dest)) { dest = Path.Combine(root, name + " (" + n + ")"); n++; }
+                Directory.CreateDirectory(dest);
+
+                foreach (string f in Directory.GetFiles(best, "*.*", SearchOption.AllDirectories))
+                {
+                    string ext = Path.GetExtension(f).ToLowerInvariant();
+                    if (ext != ".cur" && ext != ".ani") continue;
+                    File.Copy(f, Path.Combine(dest, Path.GetFileName(f)), true);
+                }
+
+                int total;
+                return ImportPack(dest, out matched, out total);
+            }
+            finally
+            {
+                try { Directory.Delete(tmp, true); } catch { }
+            }
+        }
+
+        private static string FindCursorDir(string root)
+        {
+            string best = null;
+            int bestCount = 0;
+            foreach (string d in Directory.GetDirectories(root, "*", SearchOption.AllDirectories))
+            {
+                int c = Directory.GetFiles(d, "*.cur").Length + Directory.GetFiles(d, "*.ani").Length;
+                if (c > bestCount) { bestCount = c; best = d; }
+            }
+            int rc = Directory.GetFiles(root, "*.cur").Length + Directory.GetFiles(root, "*.ani").Length;
+            if (rc > bestCount) { best = root; bestCount = rc; }
+            return bestCount > 0 ? best : null;
         }
 
         private static string FindMatch(List<string> pool, string[] keywords)
